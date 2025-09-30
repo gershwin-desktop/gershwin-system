@@ -27,6 +27,7 @@
         <string>/efi</string>
         <string>/gnustep-src</string>
         <string>/home</string>
+        <string>/initrd.img</string>
         <string>/lib</string>
         <string>/lib32</string>
         <string>/lib64</string>
@@ -46,6 +47,7 @@
         <string>/tmp</string>
         <string>/usr</string>
         <string>/var</string>
+        <string>/vmlinuz</string>
         <string>/zroot</string>
     </array>
     <key>GSWorkspaceApplication</key>
