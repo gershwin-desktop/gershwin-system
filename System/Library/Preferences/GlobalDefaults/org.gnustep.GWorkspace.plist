@@ -47,6 +47,7 @@
         <string>/tmp</string>
         <string>/usr</string>
         <string>/var</string>
+        <string>/version</string>
         <string>/vmlinuz</string>
         <string>/zroot</string>
     </array>
