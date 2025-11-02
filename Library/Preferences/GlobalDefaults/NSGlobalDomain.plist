@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>GSBackHandlesWindowDecorations</key>
-    <string>NO</string>
+    <string>YES</string>
     <key>GSReservedMountNames</key>
     <array>
         <string>proc</string>
@@ -26,6 +26,10 @@
     <key>GSTheme</key>
     <string>Rik</string>
     <key>NSUseRunningCopy</key>
+    <integer>1</integer>
+    <key>GSAppOwnsMiniwindow</key>
+    <integer>0</integer>
+    <key>GSSuppressAppIcon</key>
     <integer>1</integer>
 </dict>
 </plist>
