@@ -2,6 +2,10 @@
 
 . /System/Library/Makefiles/GNUstep.sh
 
+# Add our fonts path to fontconfig
+export FONTCONFIG_PATH=/System/Library/Preferences
+export FONTCONFIG_FILE=$FONTCONFIG_PATH/fonts.conf
+
 # Launch window manager if it is available.
 if which uroswm >/dev/null 2>&1; then
   (uroswm &)
