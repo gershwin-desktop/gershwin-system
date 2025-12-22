@@ -18,7 +18,7 @@ sleep 2 &&
 # NOTE: On some systems, a D-Bus session may already have been started by other parts
 # of the distribution by the time this script is running.
 if which Menu >/dev/null 2>&1; then
-  if [ -n "$DBUS_SESSION_BUS_ADDRESS" ] ; then
+  if [ -z "$DBUS_SESSION_BUS_ADDRESS" ] ; then
     export $(dbus-launch)
   fi
   # Make GTK applications use Menu; this requires e.g., on Debian:
