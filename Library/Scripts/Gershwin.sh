@@ -7,8 +7,8 @@ export FONTCONFIG_PATH=/System/Library/Preferences
 export FONTCONFIG_FILE=$FONTCONFIG_PATH/fonts.conf
 
 # Launch window manager if it is available.
-if which uroswm >/dev/null 2>&1; then
-  (uroswm &)
+if which WindowManager >/dev/null 2>&1; then
+  (WindowManager &)
 fi
 
 sleep 2 &&
