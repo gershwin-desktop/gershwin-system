@@ -13,6 +13,11 @@ if which WindowManager >/dev/null 2>&1; then
   (WindowManager &)
 fi
 
+# Launch devmon automounter if it is available (udevil package on Devuan).
+if which devmon >/dev/null 2>&1; then
+  (devmon &)
+fi
+
 sleep 2 &&
 
 # Launch Menu and a D-Bus session if none is already there.
