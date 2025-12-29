@@ -31,4 +31,4 @@ fi
 
 sleep 2 &&
 
-exec GWorkspace
+exec Workspace

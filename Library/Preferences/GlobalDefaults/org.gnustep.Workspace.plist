@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>DesktopApplicationName</key>
-    <string>GWorkspace</string>
+    <string>Workspace</string>
     <key>DesktopApplicationSelName</key>
     <string>gworkspace</string>
     <key>singleclicklaunch</key>
