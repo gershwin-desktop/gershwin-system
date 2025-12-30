@@ -34,6 +34,4 @@ if which Menu >/dev/null 2>&1; then
   Menu &
 fi
 
-sleep 2 &&
-
 exec Workspace
