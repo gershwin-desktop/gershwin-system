@@ -8,6 +8,9 @@ export PATH=$HOME/Library/Tools:/Local/Library/Tools:/System/Library/Tools/:$PAT
 export FONTCONFIG_PATH=/System/Library/Preferences
 export FONTCONFIG_FILE=$FONTCONFIG_PATH/fonts.conf
 
+# Allow users to access CUPS at http://localhost:631/admin/; TODO: Move in a suitable place
+sudo usermod -aG lpadmin $USER
+
 # Launch window manager if it is available.
 if which WindowManager >/dev/null 2>&1; then
   (WindowManager &)
