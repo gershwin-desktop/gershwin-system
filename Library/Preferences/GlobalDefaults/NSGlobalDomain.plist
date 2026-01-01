@@ -32,8 +32,8 @@
     <key>GSSuppressAppIcon</key>
     <integer>1</integer>
     <key>NSFont</key>
-    <string>LuxiSans</string>
+    <string>Inter-Medium</string>
     <key>NSFontSize</key>
-    <string>13.0</string>
+    <string>14.0</string>
 </dict>
 </plist>
