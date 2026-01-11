@@ -6,4 +6,4 @@
 export FONTCONFIG_PATH=/System/Library/Preferences
 export FONTCONFIG_FILE=$FONTCONFIG_PATH/fonts.conf
 
-LoginWindow
+exec LoginWindow
