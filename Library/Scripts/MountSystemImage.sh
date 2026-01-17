@@ -100,7 +100,7 @@ main() {
 
     # Mount the squashfs directly to /System
     echo "Mounting $squashfs_file to $MOUNT_POINT..."
-    squashfuse "$squashfs_file" "$MOUNT_POINT"
+    squashfuse -o allow_other "$squashfs_file" "$MOUNT_POINT"
 
     # Robust mount verification
     if [ $? -eq 0 ]; then
