@@ -13,6 +13,7 @@ export FONTCONFIG_FILE=$FONTCONFIG_PATH/fonts.conf
 
 # TODO: Proper GPU kernel module loading for FreeSBD; this is too simplistic
 # https://github.com/nomadbsd/NomadBSD/blob/master/config/etc/rc.d/initgfx
+# or better: "kldxref would create that list for devmatch"
 sysctl dev.vgapci 2>/dev/null | grep 0x8086 && kldload /boot/modules/i915kms.ko
 sysctl dev.vgapci 2>/dev/null | grep 0x1022 && kldload /boot/modules/amdgpu.ko
 sysctl dev.vgapci 2>/dev/null | grep 0x10de && kldload /boot/modulesn/nvidia.ko
