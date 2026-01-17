@@ -9,7 +9,8 @@ export FONTCONFIG_PATH=/System/Library/Preferences
 export FONTCONFIG_FILE=$FONTCONFIG_PATH/fonts.conf
 
 # Allow users to access CUPS at http://localhost:631/admin/; TODO: Move in a suitable place
-sudo usermod -aG lpadmin $USER
+# Cannot run it like this here because e.g., on stock FreeBSD there is no sudo
+# sudo usermod -aG lpadmin $USER
 
 # Launch window manager if it is available.
 if which WindowManager >/dev/null 2>&1; then
