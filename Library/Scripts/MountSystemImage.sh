@@ -3,7 +3,8 @@
 # Squashfs Mounting Script for FreeBSD
 # Mounts the most recent squashfs file to /System
 
-# TODO: Version for Linux, use uzip for FreeBSD to remove need for FUSE
+# TODO: Also handle Linux which can mount squashfs natively
+# TODO: Use uzip for FreeBSD to remove need for FUSE
 
 # Exit immediately if a command fails
 set -e
