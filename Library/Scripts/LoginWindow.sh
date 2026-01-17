@@ -8,4 +8,4 @@
 export FONTCONFIG_PATH=/System/Library/Preferences
 export FONTCONFIG_FILE=$FONTCONFIG_PATH/fonts.conf
 
-exec LoginWindow
+exec /System/Library/CoreServices/Applications/LoginWindow.app/LoginWindow
