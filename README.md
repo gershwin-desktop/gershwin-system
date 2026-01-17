@@ -19,7 +19,8 @@ mkdir -p /System /usr/local/etc/rc.d
 curl -sSf https://raw.githubusercontent.com/gershwin-desktop/gershwin-components/main/LoginWindow/loginwindow > /usr/local/etc/rc.d/loginwindow
 chmod 755 /usr/local/etc/rc.d/loginwindow
 service loginwindow enable
-
+# Make binaries from FreeBSD 14 usable on FreeBSD 15
+[ -e /lib/libutil.so.9 ] || [ ! -e /lib/libutil.so.10 ] || ln -s libutil.so.10 /lib/libutil.so.9
 ```
 
 To "update" Gershwin, just put a newer filesystem image there. The newest one will be picked automatically as per its filename.
