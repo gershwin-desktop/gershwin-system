@@ -2,6 +2,10 @@
 
 This project contains files that get populated in `/System` that are not part of other Gerswhin repositories.
 
+## Installation
+
+See https://github.com/gershwin-desktop/gershwin-desktop/wiki
+
 ## Image based "installation"
 
 There is an _experimental_ way to "install" Gershwin on FreeBSD by using a Gershwin filesystem image which is under 20 MB in size:
