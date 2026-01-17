@@ -37,4 +37,8 @@ if which Menu >/dev/null 2>&1; then
   Menu &
 fi
 
+if [ -e /System/Library/Tools/SudoAskPass ] ; then
+  export SUDO_ASKPASS=/System/Library/Tools/SudoAskPass
+fi
+
 exec Workspace
