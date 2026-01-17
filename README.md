@@ -10,14 +10,16 @@ See https://github.com/gershwin-desktop/gershwin-desktop/wiki
 
 There is an _experimental_ way to "install" Gershwin on FreeBSD by using a Gershwin filesystem image which is under 20 MB in size:
 
-```
-su
-cd /
-git clone https://github.com/gershwin-desktop/gershwin-system # FIXME: clone this to /System instead
-curl https://github.com/gershwin-desktop/gershwin-components/blob/main/LoginWindow/loginwindow # FIXME: to /usr/local/etc/rc.d
+```sh
+#!/bin/sh
+set -e
+[ "$(id -u)" = 0 ] || exec su root -c "$0"
+mkdir -p /System /usr/local/etc/rc.d
+[ -d /System/.git ] || git clone https://github.com/gershwin-desktop/gershwin-system /System
+curl -sSf https://raw.githubusercontent.com/gershwin-desktop/gershwin-components/main/LoginWindow/loginwindow > /usr/local/etc/rc.d/loginwindow
+chmod 755 /usr/local/etc/rc.d/loginwindow
 service loginwindow enable
-# Now put a Gershwin filesystem image into /System
-reboot
+
 ```
 
 To "update" Gershwin, just put a newer filesystem image there. The newest one will be picked automatically as per its filename.
