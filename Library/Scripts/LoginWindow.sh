@@ -1,6 +1,6 @@
 #!/bin/sh
 
-/System/Library/Scripts/MountSystemImage.sh
+# /System/Library/Scripts/MountSystemImage.sh
 
 . /System/Library/Makefiles/GNUstep.sh
 
