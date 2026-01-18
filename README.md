@@ -19,8 +19,8 @@ mkdir -p /System /usr/local/etc/rc.d
 curl -sSf https://raw.githubusercontent.com/gershwin-desktop/gershwin-components/main/LoginWindow/loginwindow > /usr/local/etc/rc.d/loginwindow
 chmod 755 /usr/local/etc/rc.d/loginwindow
 # Make binaries from FreeBSD 14 usable on FreeBSD 15
-[ -e /lib/libutil.so.9 ] || [ ! -e /lib/libutil.so.10 ] || ln -s libutil.so.10 /lib/libutil.so.9
-u="https://api.cirrus-ci.com/v1/artifact/task/5361614007828480/system/artifacts/FreeBSD/14/amd64/Gershwin-OS-FreeBSD-260116163642.squashfs"
+[ -e /lib/libutil.so.9 ] || [ ! -e /lib/libutil.so.10 ] || ln -s /lib/libutil.so.10 /lib/libutil.so.9
+u="https://api.cirrus-ci.com/v1/artifact/github/gershwin-desktop/gershwin-build/data/system/artifacts/FreeBSD/14/amd64/Gershwin-OS-FreeBSD-260116163642.squashfs" # Adjust number
 curl -sSf "$u" -o "/$(basename "$u")"
 ls /Gershwin*.squashfs
 service loginwindow onestart
