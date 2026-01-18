@@ -22,7 +22,7 @@ if which devmon >/dev/null 2>&1; then
   (devmon &)
 fi
 
-sleep 2 &&
+sleep 2 && # FIXME: Wait for WindowManager to start properly before launching Menu
 
 # Launch Menu and a D-Bus session if none is already there.
 # Only do this if Menu is on the $PATH; otherwise we don't require D-Bus.
@@ -41,5 +41,7 @@ fi
 if [ -e /System/Library/Tools/SudoAskPass ] ; then
   export SUDO_ASKPASS=/System/Library/Tools/SudoAskPass
 fi
+
+sleep 2 # FIXME: Wait for Menu to start properly before launching Workspace
 
 exec Workspace
