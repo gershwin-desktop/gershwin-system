@@ -1,5 +1,18 @@
 #!/bin/sh
 
+# Redirect stdout and stderr to a fifo on Linux,
+# making them accessible from a graphical session,
+# without depending on nor failing in the presence of systemd
+if [ "$(uname -s)" = "Linux" ]; then
+    BOOTLOG_DIR=/tmp
+    BOOTLOG_FIFO=/tmp/Gershwin.log.fifo
+
+    [ -d "$BOOTLOG_DIR" ] || mkdir -p "$BOOTLOG_DIR"
+    [ -p "$BOOTLOG_FIFO" ] || { rm -f "$BOOTLOG_FIFO"; mkfifo "$BOOTLOG_FIFO"; }
+
+    exec >"$BOOTLOG_FIFO" 2>&1
+fi
+
 . /System/Library/Makefiles/GNUstep.sh
 
 export PATH=$HOME/Library/Tools:/Local/Library/Tools:/System/Library/Tools/:$PATH
