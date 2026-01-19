@@ -1,0 +1,21 @@
+#!/bin/sh
+
+# Builds and installs GNUstep applications and libraries to the SYSTEM domain.
+# Run this script from the directory containing the GNUmakefile to build.
+
+set -x 
+
+. /System/Library/Makefiles/GNUstep.sh
+
+gnustep-config --variable=GNUSTEP_MAKEFILES
+
+export PATH=/System/Library/Tools/:$PATH
+export GNUSTEP_INSTALLATION_DOMAIN="SYSTEM"
+
+if [ ! -e GNUmakefile ] ; then
+  ./configure
+fi
+
+# gmake clean
+gmake
+sudo -E gmake install

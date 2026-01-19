@@ -1,0 +1,9 @@
+#!/bin/sh
+
+# Runs a program under gdb, capturing crash backtrace to /tmp/debug_gdb.txt
+# To use, run this script with the program and its arguments as parameters.
+# This is useful for debugging crashes without having to type gdb commands manually.
+
+set -e -x
+
+gdb -q --nx -batch -ex "set pagination off" -ex "set logging file /tmp/debug_gdb.txt" -ex "set logging overwrite on" -ex "set logging on" -ex "handle SIGPIPE nostop noprint pass" -ex "handle SIGCHLD nostop noprint pass" -ex "run" -ex "bt" -ex "thread apply all bt" --args "$@"

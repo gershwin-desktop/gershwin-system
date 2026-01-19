@@ -1,5 +1,10 @@
 #!/bin/sh
 
+# System preparation script for Gershwin on FreeBSD systems.
+# This script adds users to the video group and sets setuid on necessary binaries.
+# Run this script as root.
+# TODO: Extend functionality as needed and handle other operating systems.
+
 # Verify we're on FreeBSD or a FreeBSD variant
 if ! uname -s | grep -qE "FreeBSD|GhostBSD"; then
     echo "Error: This script is only for FreeBSD or FreeBSD variants" >&2
