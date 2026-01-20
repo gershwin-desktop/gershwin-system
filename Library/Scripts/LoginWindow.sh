@@ -3,15 +3,15 @@
 # Redirect stdout and stderr to a fifo on Linux,
 # making them accessible from a graphical session,
 # without depending on nor failing in the presence of systemd
-if [ "$(uname -s)" = "Linux" ]; then
-    BOOTLOG_DIR=/var/log
-    BOOTLOG_FIFO=$BOOTLOG_DIR/LoginWindow.log.fifo
-
-    [ -d "$BOOTLOG_DIR" ] || mkdir -p "$BOOTLOG_DIR"
-    [ -p "$BOOTLOG_FIFO" ] || { rm -f "$BOOTLOG_FIFO"; mkfifo "$BOOTLOG_FIFO"; }
-
-    exec >"$BOOTLOG_FIFO" 2>&1
-fi
+# if [ "$(uname -s)" = "Linux" ]; then
+#     BOOTLOG_DIR=/var/log
+#     BOOTLOG_FIFO=$BOOTLOG_DIR/LoginWindow.log.fifo
+# 
+#     [ -d "$BOOTLOG_DIR" ] || mkdir -p "$BOOTLOG_DIR"
+#     [ -p "$BOOTLOG_FIFO" ] || { rm -f "$BOOTLOG_FIFO"; mkfifo "$BOOTLOG_FIFO"; }
+# 
+#     exec >"$BOOTLOG_FIFO" 2>&1
+# fi
 
 # /System/Library/Scripts/MountSystemImage.sh
 
