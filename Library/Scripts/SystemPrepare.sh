@@ -48,8 +48,13 @@ main() {
     fi
 
     sed -i'' -e 's|quarterly|latest|g' /etc/pkg/FreeBSD.conf # FIXME: Remove once xlibre-* is in quarterly
-    pkg install -y nano xlibre-server xlibre-drivers setxkbmap automount \
+    pkg install -y nano \
+    drm-kmod xlibre-server xlibre-drivers setxkbmap \
+    automount \
     fusefs-exfat fusefs-ext2 fusefs-hfsfuse fusefs-lkl fusefs-ntfs fusefs-squashfuse
+
+    # Load i915kms if needed in late boot
+    sysrc kld_list+=“i915kms” 
 
     # Add users to video group
     add_users_to_video_group
