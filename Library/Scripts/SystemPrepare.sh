@@ -48,7 +48,7 @@ main() {
     fi
 
     sed -i'' -e 's|quarterly|latest|g' /etc/pkg/FreeBSD.conf # FIXME: Remove once xlibre-* is in quarterly
-    pkg install -y xlibre-server xlibre-drivers setxkbmap automount \
+    pkg install -y nano xlibre-server xlibre-drivers setxkbmap automount \
     fusefs-exfat fusefs-ext2 fusefs-hfsfuse fusefs-lkl fusefs-ntfs fusefs-squashfuse
 
     # Add users to video group
