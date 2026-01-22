@@ -16,6 +16,9 @@ fi
 add_users_to_video_group() {
     # Find all users with UID >= 1000
     for user in $(awk -F: '$3 >= 1000 {print $1}' /etc/passwd); do
+        # Add user to wheel group
+        pw groupmod wheel -m "$user" 2>/dev/null && \
+            echo "Added $user to video group"
         # Add user to video group
         pw groupmod video -m "$user" 2>/dev/null && \
             echo "Added $user to video group"
