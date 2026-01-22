@@ -56,6 +56,12 @@ main() {
 
     # Set setuid on specified binaries
     set_binary_setuid
+
+    # Enable LoginWindow
+    service loginwindow enable
+
+    # TODO: set nextboot (once) to the newly installed system via efi
+    reboot
 }
 
 # Run the main function
