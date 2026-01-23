@@ -1,0 +1,183 @@
+#!/bin/sh
+
+# memtrace - wrapper around valgrind to profile memory usage (massif by default)
+# Usage: memtrace [--tool=massif|memcheck] [--outdir=DIR] -- program [args...]
+# Example: memtrace --tool=massif --outdir=/tmp -- ./myapp --arg1
+
+set -e -x
+
+TOOL=massif
+OUTDIR=/tmp
+ANNOTATE=1
+TOP=5
+
+# Simple option parsing
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --tool=*) TOOL=${1#--tool=} ; shift ;;
+        --outdir=*) OUTDIR=${1#--outdir=} ; shift ;;
+        --annotate=*) v=${1#--annotate=} ; case "$v" in yes|1|true) ANNOTATE=1 ;; no|0|false) ANNOTATE=0 ;; *) echo "Invalid --annotate value: $1" >&2 ; exit 1 ;; esac ; shift ;;
+        --top=*) TOP=${1#--top=} ; shift ;;
+        -h|--help)
+            cat <<EOF
+Usage: $(basename "$0") [--tool=massif|memcheck|callgrind] [--outdir=DIR] [--annotate=yes|no] [--top=N] -- program [args...]
+
+Defaults:
+  tool=massif (heap profiler), annotate=yes, top=5.
+
+Examples:
+  $(basename "$0") --tool=massif --outdir=/tmp --annotate=yes --top=5 -- ./myapp arg1
+  $(basename "$0") --tool=memcheck -- ./myapp arg1
+  $(basename "$0") --tool=callgrind --outdir=/tmp -- ./myapp arg1
+EOF
+            exit 0 ;;
+        --) shift ; break ;;
+        -*) echo "Unknown option: $1" >&2 ; exit 1 ;;
+        *) break ;;
+    esac
+done
+
+if [ $# -eq 0 ]; then
+    echo "Missing program to run. See --help." >&2
+    exit 1
+fi
+
+# Program to run (first non-option argument)
+PROG="$1"
+PROG_PATH="$PROG"
+if [ ! -x "$PROG_PATH" ]; then
+    if command -v "$PROG" >/dev/null 2>&1; then
+        PROG_PATH=$(command -v "$PROG")
+    fi
+fi
+
+if ! command -v valgrind >/dev/null 2>&1; then
+    echo "valgrind not found in PATH" >&2
+    exit 2
+fi
+
+mkdir -p "$OUTDIR"
+
+timestamp=$(date +%Y%m%d-%H%M%S)
+base="$OUTDIR/valgrind-${TOOL}-${timestamp}"
+valout="${base}.out"
+report="${base}.txt"
+
+case "$TOOL" in
+    massi*|massif)
+        if ! command -v ms_print >/dev/null 2>&1; then
+            echo "ms_print required for massif output. Install it or use --tool=memcheck" >&2
+            exit 3
+        fi
+        valgrind --tool=massif --time-unit=B --massif-out-file="$valout" -- "$@"
+        ms_print "$valout" > "$report" || echo "ms_print failed — raw output at $valout"
+        echo "Massif raw output: $valout"
+        echo "Formatted report: $report"
+        # Try to show the largest snapshot header and a short tail of the formatted report
+        awk '/snapshot=/ { sn=substr($0,index($0,"=")+1); next } /heap_TREE/ { print "Top snapshot:", sn; exit }' "$valout" || true
+        tail -n 200 "$report" || true
+
+        # Annotate top hotspots using addr2line if requested
+        if [ "$ANNOTATE" -eq 1 ] && command -v addr2line >/dev/null 2>&1; then
+            annotated="${report}.annotated"
+            echo "Generating annotated massif report: $annotated"
+            echo "Top ${TOP} massif hotspots (raw lines):" > "$annotated"
+            awk '/->.*0x[0-9A-Fa-f]+/ { print; }' "$report" | sed -n "1,${TOP}p" >> "$annotated"
+
+            # collect addresses and module paths from top lines and map them
+            awk '/->.*0x[0-9A-Fa-f]+/ {
+                addr=""; mod="";
+                if (match($0,/0x[0-9A-Fa-f]+/)) addr=substr($0,RSTART,RLENGTH);
+                if (match($0,/\(in [^)]*\)/)) { mod=substr($0,RSTART+4,RLENGTH-5) }
+                print addr " " mod;
+            }' "$report" | awk '!seen[$0]++' | sed -n "1,${TOP}p" > "${base}.addrs"
+            if [ -s "${base}.addrs" ]; then
+                echo "" >> "$annotated"
+                echo "Address -> function / file:line" >> "$annotated"
+                while read -r addr mod; do
+                    echo "$addr${mod:+  (module: $mod)}" >> "$annotated"
+                    # prefer module if present and exists, otherwise try binary
+                    if [ -n "$mod" ] && [ -e "$mod" ]; then
+                        addr2line -f -C -e "$mod" "$addr" >> "$annotated" 2>/dev/null || echo "  (no info for $addr in $mod)" >> "$annotated"
+                        fn=$(addr2line -f -C -e "$mod" "$addr" 2>/dev/null | head -n1 || true)
+                    else
+                        addr2line -f -C -e "$PROG_PATH" "$addr" >> "$annotated" 2>/dev/null || echo "  (no info for $addr)" >> "$annotated"
+                        fn=$(addr2line -f -C -e "$PROG_PATH" "$addr" 2>/dev/null | head -n1 || true)
+                    fi
+                    # heuristic hints
+                    case "$fn" in
+                        *PNG*|*png*|*Image*|*image*|*Icon*|*icon*|*Bitmap*|*bitmap*)
+                            echo "  HINT: Looks image-related — consider lazy-loading or using smaller/resized images." >> "$annotated"
+                            ;;
+                        *) ;;
+                    esac
+                done < "${base}.addrs"
+            fi
+
+            echo "" >> "$annotated"
+            echo "Full formatted report tail (last 200 lines):" >> "$annotated"
+            tail -n 200 "$report" >> "$annotated" || true
+            echo "Annotated report: $annotated"
+            echo "Top ${TOP} hotspots (resolved where possible):"
+            awk '/->.*0x[0-9A-Fa-f]+/ { match($0,/0x[0-9A-Fa-f]+/); print substr($0,RSTART,RLENGTH); }' "$report" | sort -u | sed -n "1,${TOP}p" | while read -r a; do addr2line -f -C -e "$PROG_PATH" "$a" 2>/dev/null | sed 's/^/  /'; done || true
+        else
+            if [ "$ANNOTATE" -eq 1 ]; then
+                echo "Note: addr2line not found; skipping address annotations. Install binutils/addr2line." >&2
+            fi
+        fi
+        ;;
+    memcheck|mem)
+        valgrind --tool=memcheck --leak-check=full --show-leak-kinds=all --track-origins=yes --log-file="$valout" -- "$@"
+        echo "Memcheck log: $valout"
+        grep -E "definitely lost|possibly lost|still reachable" "$valout" || true
+
+        # Annotate memcheck leaks if requested
+        if [ "$ANNOTATE" -eq 1 ] && command -v addr2line >/dev/null 2>&1; then
+            annotated="${valout}.annotated"
+            echo "Generating annotated memcheck report: $annotated"
+            echo "Summary:" > "$annotated"
+            grep -E "definitely lost|possibly lost|still reachable" "$valout" >> "$annotated" || true
+            echo "" >> "$annotated"
+            # extract first few 'definitely lost' occurrences and map addresses found near them
+            grep -n "definitely lost" "$valout" | cut -d: -f1 | head -n "$TOP" | while read -r ln; do
+                echo "--- leak block starting at line $ln ---" >> "$annotated"
+                sed -n "${ln},$((ln+40))p" "$valout" >> "$annotated"
+                sed -n "${ln},$((ln+40))p" "$valout" | grep -o '0x[0-9A-Fa-f]\+' | sort -u > "${base}.memaddrs" || true
+                if [ -s "${base}.memaddrs" ]; then
+                    echo "  Addresses:" >> "$annotated"
+                    while read -r addr; do
+                        echo "  $addr" >> "$annotated"
+                        addr2line -f -C -e "$PROG_PATH" "$addr" >> "$annotated" 2>/dev/null || echo "    (no info for $addr)" >> "$annotated"
+                    done < "${base}.memaddrs"
+                fi
+                echo "" >> "$annotated"
+            done
+            echo "Annotated memcheck report: $annotated"
+            tail -n 200 "$valout" >> "$annotated" || true
+            echo "See $annotated for details"
+        else
+            if [ "$ANNOTATE" -eq 1 ]; then
+                echo "Note: addr2line not found; skipping memcheck address annotations. Install binutils/addr2line." >&2
+            fi
+        fi
+
+        tail -n 200 "$valout" || true
+        ;;
+    callgrind|call)
+        if ! command -v callgrind_annotate >/dev/null 2>&1; then
+            echo "callgrind_annotate required for callgrind output" >&2
+            exit 5
+        fi
+        valgrind --tool=callgrind --callgrind-out-file="$valout" -- "$@"
+        callgrind_annotate "$valout" > "$report" || echo "callgrind_annotate failed — raw output at $valout"
+        echo "Callgrind raw output: $valout"
+        echo "Annotated callgrind report: $report"
+        head -n 50 "$report" || true
+        ;;
+    *)
+        echo "Unknown tool: $TOOL" >&2
+        exit 4
+        ;;
+esac
+
+exit 0
