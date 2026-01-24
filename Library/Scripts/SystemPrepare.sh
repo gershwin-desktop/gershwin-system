@@ -50,6 +50,7 @@ main() {
     sed -i'' -e 's|quarterly|latest|g' /etc/pkg/FreeBSD.conf # FIXME: Remove once xlibre-* is in quarterly
     pkg install -y nano \
     drm-kmod xlibre-server xlibre-drivers setxkbmap \
+    xkill xwininfo xdotool \
     automount \
     fusefs-exfat fusefs-ext2 fusefs-hfsfuse fusefs-lkl fusefs-ntfs fusefs-squashfuse
 
