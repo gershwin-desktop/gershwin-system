@@ -53,7 +53,7 @@ main() {
     automount \
     fusefs-exfat fusefs-ext2 fusefs-hfsfuse fusefs-lkl fusefs-ntfs fusefs-squashfuse
 
-    # Load i915kms if needed in late boot
+    # Load i915kms if needed in late boot; FIXME: Use initgfx
     sysrc kld_list+=“i915kms” 
 
     # Add users to video group
