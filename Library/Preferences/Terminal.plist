@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>ActivityMonitorEnabled</key>
+    <string>YES</string>
+    <key>CleanCommands</key>
+    <array>
+	<string>ssh</string>
+	<string>telnet</string>
+	<string>rlogin</string>
+    </array>
+    <key>ScrollBackEnabled</key>
+    <string>YES</string>
+    <key>ScrollBackUnlimited</key>
+    <string>YES</string>
+    <key>ScrollBottomOnInput</key>
+    <string>YES</string>
+    <key>StartupAction</key>
+    <integer>3</integer>
+    <key>TerminalFont</key>
+    <string>SourceCodePro-Regular</string>
+    <key>TerminalFontSize</key>
+    <integer>12</integer>
+    <key>WindowCloseBehavior</key>
+    <integer>0</integer>
+    <key>WindowHeight</key>
+    <integer>25</integer>
+    <key>WindowWidth</key>
+    <integer>80</integer>
+</dict>
+</plist>
