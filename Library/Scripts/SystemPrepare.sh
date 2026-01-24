@@ -95,28 +95,13 @@ enable_loginwindow() {
     service loginwindow enable || log "Warning: failed to enable loginwindow"
 }
 
-# Insert sysctl settings block with explanatory comments (keeps existing semantics)
+# Insert sysctl settings block with explanatory comments
 add_sysctl_tuning() {
     SYSCTL_CONF="/etc/sysctl.conf"
-    START_MARK="# BEGIN gershwin system tuning"
-    END_MARK="# END gershwin system tuning"
 
-    log "Installing Gershwin sysctl tuning block into $SYSCTL_CONF"
-
-    # Remove existing block if present
-    if [ -f "$SYSCTL_CONF" ]; then
-        sed -i '' "/$START_MARK/,/$END_MARK/ d" "$SYSCTL_CONF"
-    fi
+    log "Appending Gershwin sysctl tuning block into $SYSCTL_CONF"
 
     cat >> "$SYSCTL_CONF" <<'EOF'
-# BEGIN gershwin system tuning
-# $FreeBSD: releng/12.1/sbin/sysctl/sysctl.conf 337624 2018-08-11 13:28:03Z brd $
-#
-#  This file is read when going to multi-user and its contents piped thru
-#  ``sysctl'' to adjust kernel values.  ``man 5 sysctl.conf'' for details.
-#
-# https://cooltrainer.org/a-freebsd-desktop-howto/
-# These settings have been used several years on low spec laptops without any problem.
 # Enhance shared memory X11 interface
 kern.ipc.shmmax=67108864
 kern.ipc.shmall=32768
@@ -189,41 +174,6 @@ kern.coredump=0
 compat.linux.osrelease="5.0.0"
 # END gershwin system tuning
 EOF
-
-    # Apply the settings immediately (best-effort) using individual sysctl writes
-    if command -v sysctl >/dev/null 2>&1; then
-        log "Applying sysctl settings individually (best-effort)"
-        tmpfile="$(mktemp "/tmp/gershwin_sysctl.XXXXXX")" || tmpfile="/tmp/gershwin_sysctl.$$"
-        sed -n "/$START_MARK/,/$END_MARK/p" "$SYSCTL_CONF" | sed '1d;$d' > "$tmpfile"
-        while IFS= read -r line || [ -n "$line" ]; do
-            # Trim leading/trailing whitespace
-            line=$(printf '%s' "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
-            [ -z "$line" ] && continue
-            case "$line" in
-                \#*) continue ;; # skip comments
-                *=*)
-                    key="${line%%=*}"
-                    val="${line#*=}"
-                    # Trim whitespace
-                    key=$(printf '%s' "$key" | sed -e 's/[[:space:]]//g')
-                    val=$(printf '%s' "$val" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
-                    # Remove surrounding double quotes from value, if present
-                    if [ "${val#\"}" != "$val" ] && [ "${val%\"}" != "$val" ]; then
-                        val=${val#\"}
-                        val=${val%\"}
-                    fi
-                    log "Setting sysctl: $key=$val"
-                    if ! sysctl -w "$key=$val" >/dev/null 2>&1; then
-                        log "Warning: sysctl failed for $key=$val; it will take effect on next boot"
-                    fi
-                ;;
-                *)
-                    # ignore other lines
-                ;;
-            esac
-        done < "$tmpfile"
-        rm -f "$tmpfile"
-    fi
 }
 
 # Reboot at the end to ensure modules and kernel settings are applied
