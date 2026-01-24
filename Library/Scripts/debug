@@ -1,9 +1,34 @@
 #!/bin/sh
 
-# Runs a program under gdb, capturing crash backtrace to /tmp/debug_gdb.txt
+# Runs a program under lldb, capturing crash backtrace to /tmp/debug_info.txt
 # To use, run this script with the program and its arguments as parameters.
-# This is useful for debugging crashes without having to type gdb commands manually.
+# This is useful for debugging crashes without having to type lldb commands manually.
 
-set -e -x
+set -e
 
-gdb -q --nx -batch -ex "set pagination off" -ex "set logging file /tmp/debug_gdb.txt" -ex "set logging overwrite on" -ex "set logging on" -ex "handle SIGPIPE nostop noprint pass" -ex "handle SIGCHLD nostop noprint pass" -ex "run" -ex "bt" -ex "thread apply all bt" --args "$@"
+# Use LLDB exclusively (no gdb fallback). Force non-interactive full output by
+# disabling the pager and setting a dumb TERM so lldb won't try to page or prompt
+# the user. Also set frame/thread formats to favor function names (including
+# Objective-C selectors) so GNUstep/objc methods display when available.
+if ! command -v lldb >/dev/null 2>&1; then
+  echo "lldb not found; please install LLVM/LLDB" >&2
+  exit 1
+fi
+
+# disable any pager and make terminal dumb so LLDB won't prompt
+export PAGER=cat
+export TERM=dumb
+
+# Configure LLDB to print function/method names where possible and run the
+# target non-interactively, print full backtraces for all threads, then quit.
+lldb --batch \
+  -o 'settings set frame-format "frame #${frame.index}: ${module.file.basename}`${function.name-with-args}{${function.pc-offset}}{ at ${line.file.fullpath}:${line.number}}{${function.is-optimized} [opt]}\n"' \
+  -o 'settings set thread-format "thread #${thread.index}: tid = ${thread.id%tid}{ ${module.file.basename}`${function.name-with-args}{${function.pc-offset}}}{, stop reason = ${thread.stop-reason}}\n"' \
+  -o 'run' \
+  -k 'thread backtrace all' \
+  -k 'quit' \
+  -- "$@" 2>&1 | tee /tmp/debug_info.txt
+
+echo
+echo "Results saved to /tmp/debug_info.txt"
+echo "Debug. Iterate until it no longer crashes. Invoke application with 'debug <executable>' to verify."
