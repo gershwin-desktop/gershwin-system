@@ -10,10 +10,30 @@ log() {
     printf "%s\n" "[SystemPrepare] $*"
 }
 
-# Verify we're on FreeBSD or a FreeBSD variant
+# Verify platform and detect OS family
+get_os_like() {
+    OS_LIKE=""
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS_LIKE="${ID_LIKE:-${ID:-}}"
+        OS_LIKE="$(printf "%s" "$OS_LIKE" | tr '[:upper:]' '[:lower:]')"
+    fi
+}
+
+is_debian_like() {
+    echo "${OS_LIKE}" | grep -qE 'debian|devuan' 2>/dev/null
+}
+
+is_freebsd() {
+    uname -s | grep -qE 'FreeBSD|GhostBSD' 2>/dev/null || echo "${OS_LIKE}" | grep -qE 'freebsd' 2>/dev/null
+}
+
 verify_platform() {
-    if ! uname -s | grep -qE "FreeBSD|GhostBSD"; then
-        log "Error: This script is only for FreeBSD or FreeBSD variants"
+    get_os_like
+    if is_freebsd || is_debian_like; then
+        log "Detected platform: ${OS_LIKE:-$(uname -s)}"
+    else
+        log "Error: This script is intended for FreeBSD or Debian-like systems"
         exit 1
     fi
 }
@@ -34,8 +54,175 @@ configure_pkg_repo() {
     sed -i'' -e 's|quarterly|latest|g' /etc/pkg/FreeBSD.conf || log "Warning: failed to update /etc/pkg/FreeBSD.conf"
 }
 
-# Install required packages for a minimal desktop experience
+# Helpers for Debian/Devuan package management and groups
+apt_pkg_exists() {
+    command -v apt-cache >/dev/null 2>&1 && apt-cache show "$1" >/dev/null 2>&1
+}
+
+ensure_group_exists() {
+    grp="$1"
+    if ! getent group "$grp" >/dev/null 2>&1; then
+        log "Group $grp not found; creating"
+        groupadd "$grp" || log "Warning: failed to create group $grp"
+    fi
+}
+
+pick_package() {
+    # Print first available package from arguments
+    for p in "$@"; do
+        if apt_pkg_exists "$p"; then
+            printf "%s" "$p"
+            return 0
+        fi
+    done
+    return 1
+}
+
+is_devuan() {
+    if [ -f /etc/os-release ]; then
+        grep -qi '^ID=devuan' /etc/os-release >/dev/null 2>&1 && return 0
+        echo "${OS_LIKE}" | grep -q devuan 2>/dev/null && return 0
+    fi
+    return 1
+}
+
+install_debian_packages() {
+    log "Installing Debian/Devuan packages (via apt)"
+    apt-get update || log "Warning: apt-get update failed"
+
+    TO_INSTALL=""
+    add_pkg() {
+        TO_INSTALL="$TO_INSTALL $1"
+        log "Selected package: $1"
+    }
+
+    if pkg=$(pick_package nano); then add_pkg "$pkg"; fi
+    if pkg=$(pick_package xserver-xorg xserver-xorg-core); then add_pkg "$pkg"; fi
+    if pkg=$(pick_package xinit); then add_pkg "$pkg"; fi
+    if pkg=$(pick_package x11-utils); then add_pkg "$pkg"; fi
+    if pkg=$(pick_package xdotool); then add_pkg "$pkg"; fi
+    if pkg=$(pick_package x11-xkb-utils); then add_pkg "$pkg"; fi
+    if pkg=$(pick_package autofs); then add_pkg "$pkg"; fi
+    if pkg=$(pick_package fuse fuse3); then add_pkg "$pkg"; fi
+    if pkg=$(pick_package exfatprogs exfat-fuse); then add_pkg "$pkg"; fi
+    if pkg=$(pick_package ntfs-3g); then add_pkg "$pkg"; fi
+    if pkg=$(pick_package hfsprogs); then add_pkg "$pkg"; fi
+    if pkg=$(pick_package squashfuse); then add_pkg "$pkg"; fi
+    if pkg=$(pick_package xserver-xorg-video-intel); then add_pkg "$pkg"; fi
+    if pkg=$(pick_package mesa-utils); then add_pkg "$pkg"; fi
+
+    if [ -n "${TO_INSTALL}" ]; then
+        log "Installing: ${TO_INSTALL}"
+        apt-get install -y ${TO_INSTALL} || log "Warning: apt-get install failed"
+    else
+        log "No candidate Debian packages available to install"
+    fi
+}
+
+add_users_to_video_group_debian() {
+    log "Adding local users (UID >= 1000) to sudo and video groups (Debian-like)"
+    ensure_group_exists video
+    ensure_group_exists sudo
+
+    for user in $(awk -F: '$3 >= 1000 {print $1}' /etc/passwd); do
+        if id -nG "$user" | grep -qw sudo; then
+            log "$user already in sudo group"
+        else
+            usermod -a -G sudo "$user" 2>/dev/null && log "Added $user to sudo group" || log "Failed to add $user to sudo group"
+        fi
+
+        if id -nG "$user" | grep -qw video; then
+            log "$user already in video group"
+        else
+            usermod -a -G video "$user" 2>/dev/null && log "Added $user to video group" || log "Failed to add $user to video group"
+        fi
+    done
+}
+
+enable_display_manager_debian() {
+    log "Attempting to enable a display manager (Debian-like)"
+
+    # systemd-based systems
+    if command -v systemctl >/dev/null 2>&1; then
+        for svc in gdm3 sddm lightdm gdm; do
+            if systemctl list-unit-files | grep -q "^${svc}"; then
+                systemctl enable "$svc" || log "Warning: failed to enable $svc"
+                return
+            fi
+        done
+        log "No known display manager systemd service found"
+    fi
+
+    # sysvinit (Devuan) using update-rc.d
+    if [ -d /etc/init.d ] && command -v update-rc.d >/dev/null 2>&1; then
+        for svc in gdm3 sddm lightdm; do
+            if [ -x "/etc/init.d/$svc" ]; then
+                update-rc.d "$svc" defaults || log "Warning: failed to setup $svc via update-rc.d"
+                return
+            fi
+        done
+        log "No known display manager init.d script found; skipping"
+    fi
+}
+
+create_devuan_loginwindow_init() {
+    if is_devuan && [ -d /etc/init.d ]; then
+        log "Creating /etc/init.d/loginwindow for Devuan (sysvinit)"
+        cat >/etc/init.d/loginwindow <<'EOF'
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          loginwindow
+# Required-Start:    $remote_fs $syslog
+# Required-Stop:     $remote_fs $syslog
+# Default-Start: 5
+# Default-Stop:
+# Short-Description: Run LoginWindow script at runlevel 5
+### END INIT INFO
+
+SCRIPT="/System/Library/Scripts/LoginWindow.sh"
+
+case "$1" in
+  start)
+    echo "Starting LoginWindow script"
+    "$SCRIPT" &
+    ;;
+  stop)
+    echo "Nothing to stop for LoginWindow script"
+    ;;
+  restart)
+    $0 stop
+    $0 start
+    ;;
+  *)
+    echo "Usage: /etc/init.d/loginwindow {start|stop|restart}"
+    exit 1
+    ;;
+esac
+
+exit 0
+EOF
+        chmod +x /etc/init.d/loginwindow || log "Warning: failed to chmod /etc/init.d/loginwindow"
+        if command -v update-rc.d >/dev/null 2>&1; then
+            update-rc.d loginwindow defaults || log "Warning: update-rc.d failed"
+        fi
+
+        if [ -f /etc/inittab ]; then
+            sed -i.bak -E 's/^id:[0-9]+:initdefault:/id:5:initdefault:/; t; $a id:5:initdefault:' /etc/inittab || log "Warning: failed to update /etc/inittab (id)"
+            grep -q '^lw:5:respawn:/System/Library/Scripts/LoginWindow.sh' /etc/inittab || echo 'lw:5:respawn:/System/Library/Scripts/LoginWindow.sh' >> /etc/inittab
+            if command -v telinit >/dev/null 2>&1; then
+                telinit q || log "Warning: telinit q failed"
+                telinit 5 || log "Warning: telinit 5 failed"
+            fi
+        fi
+    fi
+}
+
 install_packages() {
+    if is_debian_like; then
+        install_debian_packages
+        return
+    fi
+
     log "Installing base packages (editor, X11 stack, filesystem helpers)"
     pkg install -y nano \
         drm-kmod xlibre-server xlibre-drivers setxkbmap \
@@ -189,14 +376,23 @@ main() {
 
     configure_pkg_repo
     install_packages
-    configure_kld_list
 
-    add_users_to_video_group
-    set_binary_setuid
+    if is_debian_like; then
+        # Debian/Devuan-specific steps
+        add_users_to_video_group_debian
+        enable_display_manager_debian
+        create_devuan_loginwindow_init
+        log "Skipping FreeBSD-specific configuration on Debian-like system"
+    else
+        configure_kld_list
 
-    enable_loginwindow
+        add_users_to_video_group
+        set_binary_setuid
 
-    add_sysctl_tuning
+        enable_loginwindow
+
+        add_sysctl_tuning
+    fi
 
     # TODO: set nextboot (once) to the newly installed system via efi
     # Do not reboot automatically by default; allow caller to request reboot via
