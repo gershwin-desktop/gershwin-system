@@ -108,7 +108,27 @@ install_debian_packages() {
     if pkg=$(pick_package ntfs-3g); then add_pkg "$pkg"; fi
     if pkg=$(pick_package hfsprogs); then add_pkg "$pkg"; fi
     if pkg=$(pick_package squashfuse); then add_pkg "$pkg"; fi
-    if pkg=$(pick_package xserver-xorg-video-intel); then add_pkg "$pkg"; fi
+
+    # Prefer a generic driver metapackage that works across architectures
+    if pkg=$(pick_package xserver-xorg-video-all); then
+        add_pkg "$pkg"
+    else
+        # Fallback: attempt to install a broad set of drivers; pick_package will
+        # ensure only packages available for this architecture are selected.
+        for driver in \
+            xserver-xorg-video-intel \
+            xserver-xorg-video-amdgpu \
+            xserver-xorg-video-ati \
+            xserver-xorg-video-radeon \
+            xserver-xorg-video-vesa \
+            xserver-xorg-video-fbdev \
+            xserver-xorg-video-vmware; do
+            if pkg=$(pick_package "$driver"); then
+                add_pkg "$pkg"
+            fi
+        done
+    fi
+
     if pkg=$(pick_package mesa-utils); then add_pkg "$pkg"; fi
 
     if [ -n "${TO_INSTALL}" ]; then
