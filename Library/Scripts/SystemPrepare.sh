@@ -1,9 +1,13 @@
 #!/bin/sh
 
-# System preparation script for Gershwin on FreeBSD systems.
+# System preparation script for Gershwin on FreeBSD, Devuan, Debian, Raspberry Pi OS systems.
 # This script performs a small set of post-install configuration steps required
 # for the desktop to work (users->video group, setuid helpers, kernels, sysctls).
 # Run this script as root.
+
+# If extending the script, ensure each function has a single responsibility
+# and that the main() function orchestrates high-level steps only.
+# Make each step idempotent, so re-running the script is safe.
 
 # Basic logging helper
 log() {
@@ -50,9 +54,18 @@ require_root() {
 
 # Configure pkg repository type: some packages needed are only available in 'latest'
 configure_pkg_repo() {
-    log "Configuring pkg repository channel to 'latest' (temporary improvement for xlibre packages)"
-    sed -i'' -e 's|quarterly|latest|g' /etc/pkg/FreeBSD.conf || log "Warning: failed to update /etc/pkg/FreeBSD.conf"
-}
+    PKG_CONF="/etc/pkg/FreeBSD.conf"
+    if [ -f "$PKG_CONF" ]; then
+        if grep -q 'latest' "$PKG_CONF" 2>/dev/null; then
+            log "pkg repository already set to 'latest'"
+        else
+            log "Configuring pkg repository channel to 'latest' (temporary improvement for xlibre packages)"
+            sed -i'' -e 's|quarterly|latest|g' "$PKG_CONF" || log "Warning: failed to update $PKG_CONF"
+        fi
+    else
+        log "Skipping pkg repo configuration; $PKG_CONF not present"
+    fi
+} 
 
 # Helpers for Debian/Devuan package management and groups
 apt_pkg_exists() {
@@ -187,8 +200,11 @@ enable_display_manager_debian() {
 
 create_devuan_loginwindow_init() {
     if is_devuan && [ -d /etc/init.d ]; then
-        log "Creating /etc/init.d/loginwindow for Devuan (sysvinit)"
-        cat >/etc/init.d/loginwindow <<'EOF'
+        if [ -f /etc/init.d/loginwindow ]; then
+            log "/etc/init.d/loginwindow already exists; skipping creation"
+        else
+            log "Creating /etc/init.d/loginwindow for Devuan (sysvinit)"
+            cat >/etc/init.d/loginwindow <<'EOF'
 #!/bin/sh
 ### BEGIN INIT INFO
 # Provides:          loginwindow
@@ -221,7 +237,9 @@ esac
 
 exit 0
 EOF
-        chmod +x /etc/init.d/loginwindow || log "Warning: failed to chmod /etc/init.d/loginwindow"
+            chmod +x /etc/init.d/loginwindow || log "Warning: failed to chmod /etc/init.d/loginwindow"
+        fi
+
         if command -v update-rc.d >/dev/null 2>&1; then
             update-rc.d loginwindow defaults || log "Warning: update-rc.d failed"
         fi
@@ -234,6 +252,146 @@ EOF
                 telinit 5 || log "Warning: telinit 5 failed"
             fi
         fi
+    fi
+}
+
+
+# Detect systemd and Raspberry Pi OS
+is_systemd() {
+    [ -d /run/systemd/system ] && return 0
+    command -v systemctl >/dev/null 2>&1
+}
+
+is_raspberry_pi_os() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        case "${ID:-}${NAME:-}${PRETTY_NAME:-}${ID_LIKE:-}" in
+            *raspbian*|*raspberry*|*raspberrypi*) return 0 ;;
+        esac
+    fi
+    return 1
+}
+
+configure_lightdm_for_rpi() {
+    LIGHTDM_CONF="/etc/lightdm/lightdm.conf"
+    if [ ! -f "$LIGHTDM_CONF" ]; then
+        log "No $LIGHTDM_CONF found; skipping LightDM configuration"
+        return
+    fi
+
+    # Backup once
+    if [ ! -f "${LIGHTDM_CONF}.gershwin.bak" ]; then
+        cp -a "$LIGHTDM_CONF" "${LIGHTDM_CONF}.gershwin.bak" || log "Warning: failed to backup $LIGHTDM_CONF"
+    fi
+
+    # Comment out autologin-user and pi-greeter lines if present
+    sed -i.bak -E 's/^\s*(autologin-user\s*=.*)/# \1/' "$LIGHTDM_CONF" || true
+    sed -i -E 's/^\s*(greeter-session\s*=\s*pi-greeter)/# \1/' "$LIGHTDM_CONF" || true
+
+    # Ensure greeter-session is set to lightdm-gtk-greeter (if not present)
+    if ! grep -q '^[[:space:]]*greeter-session[[:space:]]*=.*lightdm-gtk-greeter' "$LIGHTDM_CONF" 2>/dev/null; then
+        # Try to add under [Seat:*] if exists
+        if grep -q '^\[Seat:' "$LIGHTDM_CONF" 2>/dev/null; then
+            sed -n '/^\[Seat:/q;p' "$LIGHTDM_CONF" >/dev/null 2>&1 || true
+            awk '/^\[Seat:/{print; print "greeter-session=lightdm-gtk-greeter"; skip=1; next} {print}' "$LIGHTDM_CONF" > "${LIGHTDM_CONF}.tmp" && mv "${LIGHTDM_CONF}.tmp" "$LIGHTDM_CONF"
+        else
+            # Append at end
+            echo "greeter-session=lightdm-gtk-greeter" >> "$LIGHTDM_CONF"
+        fi
+        log "Configured lightdm to use lightdm-gtk-greeter"
+    else
+        log "LightDM already configured to use lightdm-gtk-greeter"
+    fi
+}
+
+create_gershwin_xsession() {
+    XSESSION_DIR="/usr/share/xsessions"
+    XSESSION_FILE="$XSESSION_DIR/Gershwin.desktop"
+    if [ ! -d "$XSESSION_DIR" ]; then
+        log "$XSESSION_DIR does not exist; skipping session creation"
+        return
+    fi
+    if [ -f "$XSESSION_FILE" ]; then
+        log "$XSESSION_FILE already exists; skipping"
+        return
+    fi
+    cat >"$XSESSION_FILE" <<'EOF'
+[Desktop Entry]
+Name=Gershwin
+Exec=/System/Library/Scripts/Gershwin.sh
+Type=Application
+EOF
+    log "Created $XSESSION_FILE"
+}
+
+create_systemd_loginwindow() {
+    SERVICE_PATH="/usr/lib/systemd/system/LoginWindow.service"
+    if ! is_systemd; then
+        log "Systemd not present; skipping systemd LoginWindow setup"
+        return
+    fi
+
+    if [ -f "$SERVICE_PATH" ]; then
+        log "$SERVICE_PATH already exists; skipping creation"
+    else
+        cat >"$SERVICE_PATH" <<'EOF'
+[Unit]
+Description=LoginWindow
+After=systemd-user-sessions.service dev-dri-card0.device dev-dri-renderD128.device
+Wants=dev-dri-card0.device dev-dri-renderD128.device
+
+# replaces plymouth-quit since LoginWindow quits plymouth on its own
+Conflicts=plymouth-quit.service
+After=plymouth-quit.service
+
+# LoginWindow takes responsibility for stopping plymouth, so if it fails
+# for any reason, make sure plymouth still stops
+OnFailure=plymouth-quit.service
+
+[Service]
+ExecStart=/System/Library/Scripts/LoginWindow.sh
+Restart=always
+
+[Install]
+Alias=display-manager.service
+EOF
+        log "Created $SERVICE_PATH"
+        systemctl daemon-reload || log "Warning: systemctl daemon-reload failed"
+    fi
+
+    # Only enable/start if explicitly requested via LOGINWINDOW=1
+    if [ "${LOGINWINDOW}" = "1" ]; then
+        if command -v systemctl >/dev/null 2>&1; then
+            if systemctl is-enabled LoginWindow.service >/dev/null 2>&1; then
+                log "LoginWindow.service already enabled"
+            else
+                systemctl disable lightdm >/dev/null 2>&1 || true
+                systemctl mask lightdm >/dev/null 2>&1 || true
+                systemctl enable LoginWindow.service || log "Warning: failed to enable LoginWindow.service"
+                systemctl start LoginWindow.service || log "Warning: failed to start LoginWindow.service"
+                log "LoginWindow.service enabled and started"
+            fi
+        fi
+    else
+        log "Created LoginWindow service file. To enable: set LOGINWINDOW=1 and re-run the script or run the commands manually."
+    fi
+}
+
+configure_systemd_display() {
+    if ! is_systemd; then
+        log "Systemd not present; skipping systemd display configuration"
+        return
+    fi
+
+    if is_raspberry_pi_os; then
+        log "Raspberry Pi OS detected; applying recommended LightDM and session changes"
+        configure_lightdm_for_rpi
+        create_gershwin_xsession
+        create_systemd_loginwindow
+    else
+        # For generic systemd Debian-like systems, create session file at least
+        create_gershwin_xsession
+        create_systemd_loginwindow
     fi
 }
 
@@ -255,7 +413,20 @@ install_packages() {
 # Load kernel module for Intel GPUs in late boot; required for proper acceleration
 configure_kld_list() {
     log "Ensuring i915kms is in kld_list (for Intel iGPU support)"
-    sysrc kld_list+="i915kms" || log "Warning: sysrc failed to update kld_list"
+
+    if command -v sysrc >/dev/null 2>&1; then
+        current_kld_list=$(sysrc -n kld_list 2>/dev/null || true)
+        case "$current_kld_list" in
+            *i915kms*)
+                log "i915kms already present in kld_list"
+                ;;
+            *)
+                sysrc kld_list+="i915kms" || log "Warning: sysrc failed to update kld_list"
+                ;;
+        esac
+    else
+        log "sysrc not available; skipping kld_list update"
+    fi
 
     # Try to load the module now so users don't need to reboot to get basic acceleration
     if command -v kldload >/dev/null 2>&1; then
@@ -269,7 +440,7 @@ configure_kld_list() {
             fi
         fi
     fi
-}
+} 
 
 # Add interactive desktop users to groups that allow access to video and privileged helpers
 # Rationale: GUI users need access to video devices; adding to wheel also convenient for local admin tasks
@@ -277,10 +448,19 @@ add_users_to_video_group() {
     log "Adding local users (UID >= 1000) to wheel and video groups"
     # Find all users with UID >= 1000
     for user in $(awk -F: '$3 >= 1000 {print $1}' /etc/passwd); do
-        pw groupmod wheel -m "$user" 2>/dev/null && log "Added $user to wheel group"
-        pw groupmod video -m "$user" 2>/dev/null && log "Added $user to video group"
+        if id -nG "$user" | grep -qw wheel; then
+            log "$user already in wheel group"
+        else
+            pw groupmod wheel -m "$user" 2>/dev/null && log "Added $user to wheel group" || log "Failed to add $user to wheel group"
+        fi
+
+        if id -nG "$user" | grep -qw video; then
+            log "$user already in video group"
+        else
+            pw groupmod video -m "$user" 2>/dev/null && log "Added $user to video group" || log "Failed to add $user to video group"
+        fi
     done
-}
+} 
 
 # Set setuid on a small number of system helpers so GUI tools and non-root users can perform common actions
 # Rationale: mount/umount/eject/shutdown/reboot/halt are commonly invoked from GUI tools and expect setuid
@@ -289,12 +469,16 @@ set_binary_setuid() {
     binaries="/sbin/mount /sbin/umount /sbin/eject /sbin/shutdown /sbin/halt /sbin/reboot"
     for binary in $binaries; do
         if [ -x "$binary" ]; then
-            chmod u+s "$binary" && log "Set setuid on $binary" || log "Failed to set setuid on $binary"
+            if [ -u "$binary" ]; then
+                log "Setuid already set on $binary"
+            else
+                chmod u+s "$binary" && log "Set setuid on $binary" || log "Failed to set setuid on $binary"
+            fi
         else
             log "Binary $binary does not exist or is not executable"
         fi
     done
-}
+} 
 
 # Enable LoginWindow service so the graphical login is started at boot
 enable_loginwindow() {
@@ -307,6 +491,12 @@ add_sysctl_tuning() {
     SYSCTL_CONF="/etc/sysctl.conf"
 
     log "Appending Gershwin sysctl tuning block into $SYSCTL_CONF"
+
+    # Avoid duplicate blocks if present
+    if grep -q '^# END gershwin system tuning' "$SYSCTL_CONF" 2>/dev/null; then
+        log "Gershwin sysctl tuning already present in $SYSCTL_CONF"
+        return
+    fi
 
     cat >> "$SYSCTL_CONF" <<'EOF'
 # Enhance shared memory X11 interface
@@ -381,7 +571,7 @@ kern.coredump=0
 compat.linux.osrelease="5.0.0"
 # END gershwin system tuning
 EOF
-}
+} 
 
 # Reboot at the end to ensure modules and kernel settings are applied
 perform_reboot() {
@@ -402,6 +592,10 @@ main() {
         add_users_to_video_group_debian
         enable_display_manager_debian
         create_devuan_loginwindow_init
+
+        # Configure systemd / Raspberry Pi OS display options when applicable
+        configure_systemd_display
+
         log "Skipping FreeBSD-specific configuration on Debian-like system"
     else
         configure_kld_list
