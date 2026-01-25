@@ -6,7 +6,7 @@ DESTDIR ?=
 SYS_LIB_DIR := $(DESTDIR)/System/Library
 LIBSRC := Library
 
-STAMP := $(DESTDIR)/Library/Receipts/System.stamp
+STAMP := $(DESTDIR)/System/Library/Receipts/System.stamp
 STAMP_DIR := $(dir $(STAMP))
 
 .PHONY: all install uninstall clean
