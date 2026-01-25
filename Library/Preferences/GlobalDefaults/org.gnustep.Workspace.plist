@@ -10,6 +10,8 @@
     <true/>
 	<key>imagepath</key>
 	<string>/System/Library/Desktop Pictures/Abstract Blue.png</string>
+	<key>imagestyle</key>
+	<integer>1</integer>
     <key>NSWindow Frame finder</key>
     <string>451 515 486 288 0 0 1280 778</string>
     <key>NSWindow Frame inspector</key>
