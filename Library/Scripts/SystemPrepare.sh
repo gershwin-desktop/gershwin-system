@@ -32,6 +32,15 @@ is_freebsd() {
     uname -s | grep -qE 'FreeBSD|GhostBSD' 2>/dev/null || echo "${OS_LIKE}" | grep -qE 'freebsd' 2>/dev/null
 }
 
+is_ghostbsd() {
+    if [ -f /etc/os-release ]; then
+        grep -qi 'ID=ghostbsd' /etc/os-release >/dev/null 2>&1 && return 0
+    fi
+    # Some GhostBSD versions might have it in uname -s
+    uname -s | grep -qi 'GhostBSD' >/dev/null 2>&1 && return 0
+    return 1
+}
+
 verify_platform() {
     get_os_like
     if is_freebsd || is_debian_like; then
@@ -56,6 +65,11 @@ require_root() {
 configure_pkg_repo() {
     PKG_CONF="/etc/pkg/FreeBSD.conf"
     if [ -f "$PKG_CONF" ]; then
+        if ! is_ghostbsd; then
+            log "Vanilla FreeBSD detected; skipping repository change to 'latest'"
+            return
+        fi
+
         if grep -q 'latest' "$PKG_CONF" 2>/dev/null; then
             log "pkg repository already set to 'latest'"
         else
@@ -402,8 +416,16 @@ install_packages() {
     fi
 
     log "Installing base packages (editor, X11 stack, filesystem helpers)"
+
+    if is_ghostbsd; then
+        X11_PKGS="xlibre-server xlibre-drivers"
+    else
+        # Standard Xorg and drivers for vanilla FreeBSD
+        X11_PKGS="xorg-server xf86-video-intel xf86-video-amdgpu xf86-video-ati xf86-video-vmware xf86-video-vesa xf86-input-libinput"
+    fi
+
     pkg install -y nano \
-        drm-kmod xlibre-server xlibre-drivers setxkbmap \
+        drm-kmod ${X11_PKGS} setxkbmap \
         xkill xwininfo xdotool \
         automount \
         fusefs-exfat fusefs-ext2 fusefs-hfsfuse fusefs-lkl fusefs-ntfs fusefs-squashfuse || \
