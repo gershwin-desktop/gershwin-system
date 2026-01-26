@@ -82,7 +82,7 @@
             <real>0.372</real>
         </dict>
         <key>usebackimage</key>
-        <false/>
+        <true/>
     </dict>
     <key>dockposition</key>
     <integer>2</integer>
