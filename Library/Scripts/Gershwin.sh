@@ -21,6 +21,9 @@ export PATH=$HOME/Library/Tools:/Local/Library/Tools:/System/Library/Tools/:$PAT
 export FONTCONFIG_PATH=/System/Library/Preferences
 export FONTCONFIG_FILE=$FONTCONFIG_PATH/fonts.conf
 
+# Indicate Gershwin Desktop to tools like Fastfetch
+export XDG_CURRENT_DESKTOP="Gershwin"
+
 # Allow users to access CUPS at http://localhost:631/admin/; TODO: Move in a suitable place
 # Cannot run it like this here because e.g., on stock FreeBSD there is no sudo
 # sudo usermod -aG lpadmin $USER
