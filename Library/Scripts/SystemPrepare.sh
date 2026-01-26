@@ -136,6 +136,28 @@ install_debian_packages() {
     if pkg=$(pick_package hfsprogs); then add_pkg "$pkg"; fi
     if pkg=$(pick_package squashfuse); then add_pkg "$pkg"; fi
 
+    # Network, firmware and utilities
+    if pkg=$(pick_package ntpdate); then add_pkg "$pkg"; fi
+    if pkg=$(pick_package sshpass); then add_pkg "$pkg"; fi
+
+    # Wireless and Bluetooth firmware
+    for fw in \
+        firmware-linux \
+        firmware-linux-nonfree \
+        firmware-misc-nonfree \
+        firmware-iwlwifi \
+        firmware-realtek \
+        firmware-atheros \
+        firmware-brcm80211 \
+        firmware-libertas \
+        firmware-zd1211 \
+        firmware-ti-connectivity \
+        bluez-firmware; do
+        if pkg=$(pick_package "$fw"); then
+            add_pkg "$pkg"
+        fi
+    done
+
     # Prefer a generic driver metapackage that works across architectures
     if pkg=$(pick_package xserver-xorg-video-all); then
         add_pkg "$pkg"
@@ -424,10 +446,14 @@ install_packages() {
         X11_PKGS="xorg-server xf86-video-intel xf86-video-amdgpu xf86-video-ati xf86-video-vmware xf86-video-vesa xf86-input-libinput"
     fi
 
+    # Network, firmware and utilities
+    WLAN_FW_PKGS="wifi-firmware-kmod wifi-firmware-ath10k-kmod wifi-firmware-ath11k-kmod wifi-firmware-iwlwifi-kmod wifi-firmware-mt76-kmod wifi-firmware-rtw88-kmod wifi-firmware-rtw89-kmod bwi-firmware-kmod bwn-firmware-kmod iwm-firmware-kmod iwi-firmware-kmod ipw-firmware-kmod"
+    BT_FW_PKGS="bluez-firmware"
+
     pkg install -y nano \
         drm-kmod ${X11_PKGS} setxkbmap \
         xkill xwininfo xdotool \
-        automount \
+        automount sshpass ${WLAN_FW_PKGS} ${BT_FW_PKGS} \
         fusefs-exfat fusefs-ext2 fusefs-hfsfuse fusefs-lkl fusefs-ntfs fusefs-squashfuse || \
         log "Warning: one or more pkg installs failed"
 }
