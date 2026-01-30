@@ -234,6 +234,14 @@ enable_display_manager_debian() {
     fi
 }
 
+change_elogind_conf() {
+    # Check if /etc/elogind/logind.conf exists
+    if [ -f /etc/elogind/logind.conf ]; then
+        # Disable handling of power button presses, let Workspace handle it
+        sed -i' ' 's/^HandlePowerKey=.*/HandlePowerKey=ignore # Workspace handles this key/' /etc/elogind/logind.conf
+    fi
+}
+
 create_devuan_loginwindow_init() {
     if is_devuan && [ -d /etc/init.d ]; then
         if [ -f /etc/init.d/loginwindow ]; then
@@ -640,6 +648,7 @@ main() {
         add_users_to_video_group_debian
         enable_display_manager_debian
         create_devuan_loginwindow_init
+        change_elogind_conf
 
         # Configure systemd / Raspberry Pi OS display options when applicable
         configure_systemd_display
