@@ -498,6 +498,21 @@ configure_kld_list() {
     fi
 } 
 
+# Enable and configure common FreeBSD services
+enable_freebsd_services() {
+    if command -v sysrc >/dev/null 2>&1; then
+        log "Enabling common FreeBSD services (cups, avahi, ntpd, clear_tmp)"
+        sysrc cupsd_enable="YES" # Enable CUPS printing daemon
+        sysrc avahi_daemon_enable="YES" # Enable Avahi mDNS/DNS-SD daemon for network service discovery
+        sysrc avahi_dnsconfd_enable="YES" # Enable Avahi's DNS resolver integration
+        sysrc ntpd_enable="YES" # Enable NTP daemon for time synchronization
+        sysrc ntpd_sync_on_start="YES" # Force ntpd to sync immediately on start
+        sysrc clear_tmp_enable="YES" # Enable clearing of /tmp at boot
+    else
+        log "sysrc not available; cannot enable FreeBSD services"
+    fi
+}
+
 # Add interactive desktop users to groups that allow access to video and privileged helpers
 # Rationale: GUI users need access to video devices; adding to wheel also convenient for local admin tasks
 add_users_to_video_group() {
@@ -656,6 +671,8 @@ main() {
         log "Skipping FreeBSD-specific configuration on Debian-like system"
     else
         configure_kld_list
+
+        enable_freebsd_services
 
         add_users_to_video_group
         set_binary_setuid
