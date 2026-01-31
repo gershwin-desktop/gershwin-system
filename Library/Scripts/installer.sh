@@ -17,9 +17,15 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-# Stop devd to prevent automounting interference and ensure it starts on exit
-trap 'service devd start' EXIT
-service devd stop
+# Temporarily disable automounter to prevent automounting interference.
+# `service devd stop` is not working reliably, so mount a nullfs over /usr/local/sbin as a workaround.
+# FIXME: Find a better way
+MOUNTED_NULLFS=0
+if ! mount | awk '{print $3}' | grep -qx '/usr/local/sbin'; then
+    mount -t nullfs nullfs /usr/local/sbin
+    MOUNTED_NULLFS=1
+fi
+trap 'if [ "$MOUNTED_NULLFS" = "1" ]; then umount /usr/local/sbin 2>/dev/null || true; fi' EXIT
 
 # Determine if /dev/da0 is mounted and offer image-based installation only if it is
 MP=$(mount | awk '$1 ~ /^\/dev\/da0/ {print $3; exit}')
