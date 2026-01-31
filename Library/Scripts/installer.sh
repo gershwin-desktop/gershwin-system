@@ -17,6 +17,22 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
+# Determine if /dev/da0 is mounted and offer image-based installation only if it is
+MP=$(mount | awk '$1 ~ /^\/dev\/da0/ {print $3; exit}')
+if [ -n "$MP" ]; then
+    printf "Do you want an image-based installation (copy the contents of %s) instead of copying /? [y/N]: " "$MP"
+    read -r image_ans
+    case "$image_ans" in
+        [Yy]*)
+            echo "Image-based install: copying from $MP"
+            SRC="$MP"
+            ;;
+        *) SRC="/" ;;
+    esac
+else
+    SRC="/"
+fi
+
 MNT="/mnt"
 EFI_SIZE="512M"
 
@@ -45,9 +61,33 @@ else
     VALID_DISKS=""
     # 2GB in bytes
     MIN_SIZE=2147483648
+
+    # Determine disks to exclude: the disk containing the installer script and the disk mounted as /
+    SCRIPT_PATH="$0"
+    case "$SCRIPT_PATH" in /*) ;; *) SCRIPT_PATH="$(pwd)/$SCRIPT_PATH" ;; esac
+    if command -v realpath >/dev/null 2>&1; then
+        SCRIPT_PATH="$(realpath "$SCRIPT_PATH")"
+    fi
+    SCRIPT_DEV=$(df -P "$SCRIPT_PATH" 2>/dev/null | awk 'NR==2 {print $1}' || true)
+    ROOT_DEV=$(mount | awk '$3=="/" {print $1}' || true)
+    disk_base() { basename "$1" | sed -E 's/p?[0-9]+$//' | sed -E 's/s[0-9]+$//' ; }
+    SCRIPT_DISK=$(disk_base "$SCRIPT_DEV")
+    ROOT_DISK=$(disk_base "$ROOT_DEV")
+    EXCLUDED_MSG=""
+    if [ -n "$SCRIPT_DISK" ]; then EXCLUDED_MSG="$EXCLUDED_MSG installer:$SCRIPT_DISK"; fi
+    if [ -n "$ROOT_DISK" ] && [ "$ROOT_DISK" != "$SCRIPT_DISK" ]; then EXCLUDED_MSG="$EXCLUDED_MSG root:$ROOT_DISK"; fi
+    if [ -n "$EXCLUDED_MSG" ]; then echo "Excluding disks: $EXCLUDED_MSG"; fi
     
     # shellcheck disable=SC2046
     for d in $(sysctl -n kern.disks 2>/dev/null); do
+        # Skip the installer or root disk
+        if [ -n "$SCRIPT_DISK" ] && [ "$d" = "$SCRIPT_DISK" ]; then
+            continue
+        fi
+        if [ -n "$ROOT_DISK" ] && [ "$d" = "$ROOT_DISK" ]; then
+            continue
+        fi
+
         # diskinfo without flags returns: device sectorsize size_bytes size_sectors ...
         size=$(diskinfo "/dev/$d" 2>/dev/null | awk '{print $3}')
         [ -z "$size" ] && size=0
@@ -58,7 +98,7 @@ else
     done
 
     if [ -z "$VALID_DISKS" ]; then
-        echo "ERROR: No disks larger than 2GB found."
+        echo "ERROR: No disks larger than 2GB found (after excluding installer/root disks)."
         echo "Ensure you are running on FreeBSD and have permissions to access disks."
         exit 1
     fi
@@ -164,8 +204,8 @@ for d in dev proc run tmp var/run var/tmp var/cache; do
 done
 chmod 1777 "$MNT/tmp" "$MNT/var/tmp"
 
-# Copy running system
-echo "Copying running system..."
+echo "Copying system from $SRC to $MNT..."
+
 # Exclude runtime dirs
 EXCLUDES="dev proc sys tmp mnt media efi run var/run var/tmp var/cache compat"
 EXCLUDE_ARGS=""
@@ -176,10 +216,10 @@ done
 # POSIX-safe cp -a with excludes using rsync if available, else fallback to find+cp
 if command -v rsync >/dev/null 2>&1; then
     # shellcheck disable=SC2086
-    rsync -aHAX $EXCLUDE_ARGS / "$MNT"
+    rsync -aHAX $EXCLUDE_ARGS "${SRC%/}/" "$MNT"
 else
     # fallback
-    cd /
+    cd "$SRC"
     for item in * .*; do
         # Skip '.' and '..'
         if [ "$item" = "." ] || [ "$item" = ".." ]; then continue; fi
@@ -192,6 +232,11 @@ else
         cp -a "$item" "$MNT/" || true
     done
 fi
+
+# Create the directories we skipped during copying
+for d in $EXCLUDES; do
+    mkdir -p "$MNT/$d"
+done
 
 # Install bootloader
 if [ "$BOOT_METHOD" = "UEFI" ]; then
