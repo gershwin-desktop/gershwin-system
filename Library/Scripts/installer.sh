@@ -17,6 +17,10 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
+# Stop devd to prevent automounting interference and ensure it starts on exit
+trap 'service devd start' EXIT
+service devd stop
+
 # Determine if /dev/da0 is mounted and offer image-based installation only if it is
 MP=$(mount | awk '$1 ~ /^\/dev\/da0/ {print $3; exit}')
 if [ -n "$MP" ]; then
