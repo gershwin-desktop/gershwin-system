@@ -39,7 +39,7 @@ if mount | grep -q "type iso9660"; then
     esac
 fi
 
-MNT="/mnt/gershwin_target"
+MNT="/mnt/target"
 EFI_SIZE="512MiB"
 
 umount_recursive() {
@@ -175,9 +175,9 @@ fi
 
 # Formatting
 echo "Formatting partitions..."
-mkfs.ext4 -F -L "GershwinRoot" "$ROOT_PART"
+mkfs.ext4 -F -L "Root" "$ROOT_PART"
 if [ "$BOOT_METHOD" = "UEFI" ] || [ "$BOOT_METHOD" = "BROADCOM" ]; then
-    mkfs.vfat -F 32 -n "GERSHWINBOOT" "$EFI_PART"
+    mkfs.vfat -F 32 -n "BOOT" "$EFI_PART"
 fi
 
 # Mounting
@@ -231,7 +231,7 @@ done
 echo "Installing bootloader..."
 if [ "$BOOT_METHOD" = "UEFI" ]; then
     # We install with --removable to ensure it works even if NVRAM is not updated
-    chroot "$MNT" grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=Gershwin --recheck --removable
+    chroot "$MNT" grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=Linux --recheck --removable
 elif [ "$BOOT_METHOD" = "BROADCOM" ]; then
     echo "Copying Broadcom firmware to boot partition from $RPI_BOOT_DIR..."
     # Copy from the host's RPI_BOOT_DIR as it contains the working firmware
