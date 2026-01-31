@@ -28,6 +28,7 @@
         <string>/compat</string>
         <string>/dev</string>
         <string>/etc</string>
+        <string>/entropy</string>
         <string>/efi</string>
         <string>/gnustep-src</string>
         <string>/home</string>
@@ -40,6 +41,7 @@
         <string>/media</string>
         <string>/mnt</string>
         <string>/net</string>
+        <string>/nvidia</string>
         <string>/opt</string>
         <string>/proc</string>
         <string>/rescue</string>
@@ -50,6 +52,7 @@
         <string>/sys</string>
         <string>/tmp</string>
         <string>/usr</string>
+        <string>/uzip</string>
         <string>/var</string>
         <string>/version</string>
         <string>/vmlinuz</string>
