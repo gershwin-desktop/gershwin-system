@@ -286,5 +286,6 @@ EOF
 sync
 umount_recursive
 
-echo "=== CLONE COMPLETE ==="
-echo "Please restart the system."
+echo "=== COMPLETE ==="
+echo "The system is now installed on $DISK."
+echo "You may now restart your computer."
