@@ -137,7 +137,7 @@ install_debian_packages() {
     if pkg=$(pick_package squashfuse); then add_pkg "$pkg"; fi
 
     # Network, firmware and utilities
-    if pkg=$(pick_package ntpdate); then add_pkg "$pkg"; fi
+    if pkg=$(pick_package ntp); then add_pkg "$pkg"; fi
     if pkg=$(pick_package sshpass); then add_pkg "$pkg"; fi
 
     # Wireless and Bluetooth firmware
