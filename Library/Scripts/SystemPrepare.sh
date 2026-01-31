@@ -462,6 +462,7 @@ install_packages() {
         drm-kmod ${X11_PKGS} setxkbmap \
         xkill xwininfo xdotool \
         automount sshpass ${WLAN_FW_PKGS} ${BT_FW_PKGS} \
+        ntp \
         fusefs-exfat fusefs-ext2 fusefs-hfsfuse fusefs-lkl fusefs-ntfs fusefs-squashfuse || \
         log "Warning: one or more pkg installs failed"
 }
