@@ -126,6 +126,7 @@ install_debian_packages() {
     if pkg=$(pick_package nano); then add_pkg "$pkg"; fi
     if pkg=$(pick_package xserver-xorg xserver-xorg-core); then add_pkg "$pkg"; fi
     if pkg=$(pick_package xinit); then add_pkg "$pkg"; fi
+    if pkg=$(pick_package dbus-x11); then add_pkg "$pkg"; fi
     if pkg=$(pick_package x11-utils); then add_pkg "$pkg"; fi
     if pkg=$(pick_package xdotool); then add_pkg "$pkg"; fi
     if pkg=$(pick_package x11-xkb-utils); then add_pkg "$pkg"; fi
