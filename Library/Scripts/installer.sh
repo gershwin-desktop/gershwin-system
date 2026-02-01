@@ -28,7 +28,14 @@ fi
 trap 'if [ "$MOUNTED_TMPFS" = "1" ]; then umount /usr/local/sbin 2>/dev/null || true; fi' EXIT
 
 # Determine if /dev/da0 is mounted and offer image-based installation only if it is
-MP=$(mount | awk '$1 ~ /^\/dev\/da0/ {print $3; exit}')
+MP=$(mount | while read -r line; do
+    case "$line" in
+        /dev/da0*)
+            echo "$line" | sed 's/^[^ ]* on \(.*\) (.*)/\1/'
+            exit 0
+            ;;
+    esac
+done)
 if [ -n "$MP" ]; then
     printf "Do you want an image-based installation (copy the contents of %s) instead of copying /? [y/N]: " "$MP"
     read -r image_ans
@@ -48,8 +55,32 @@ EFI_SIZE="512M"
 
 # Function: unmount everything under $MNT
 umount_recursive() {
-    mount | awk '{print $3}' | grep "^$MNT" | sort -r | while read -r mp; do
+    mount | while read -r line; do
+        mp=$(echo "$line" | sed 's/^[^ ]* on \(.*\) (.*)/\1/')
+        case "$mp" in
+            "$MNT"*) echo "$mp" ;;
+        esac
+    done | sort -r | while read -r mp; do
         umount "$mp" 2>/dev/null || true
+    done
+}
+
+# Function: unmount all partitions of a disk
+umount_disk_partitions() {
+    disk_to_unmount="$1"
+    [ -z "$disk_to_unmount" ] && return
+    
+    mount | while read -r line; do
+        dev=$(echo "$line" | cut -d' ' -f1)
+        case "$dev" in
+            "$disk_to_unmount" | "${disk_to_unmount}p"* | "${disk_to_unmount}s"*)
+                mp=$(echo "$line" | sed 's/^[^ ]* on \(.*\) (.*)/\1/')
+                if [ -n "$mp" ] && [ "$mp" != "/" ]; then
+                    echo "Unmounting $mp ($dev)..."
+                    umount -f "$mp" 2>/dev/null || true
+                fi
+                ;;
+        esac
     done
 }
 
@@ -169,6 +200,7 @@ sleep 1
 set -x
 
 # Cleanup
+umount_disk_partitions "$DISK"
 umount_recursive
 
 echo "Destroying old partition table..."
