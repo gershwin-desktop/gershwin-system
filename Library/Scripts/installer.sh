@@ -48,8 +48,32 @@ EFI_SIZE="512M"
 
 # Function: unmount everything under $MNT
 umount_recursive() {
-    mount | awk '{print $3}' | grep "^$MNT" | sort -r | while read -r mp; do
+    mount | while read -r line; do
+        mp=$(echo "$line" | sed 's/^[^ ]* on \(.*\) (.*/\1/')
+        case "$mp" in
+            "$MNT"*) echo "$mp" ;;
+        esac
+    done | sort -r | while read -r mp; do
         umount "$mp" 2>/dev/null || true
+    done
+}
+
+# Function: unmount all partitions of a disk
+umount_disk_partitions() {
+    disk_to_unmount="$1"
+    [ -z "$disk_to_unmount" ] && return
+    
+    mount | while read -r line; do
+        dev=$(echo "$line" | cut -d' ' -f1)
+        case "$dev" in
+            "$disk_to_unmount" | "${disk_to_unmount}p"* | "${disk_to_unmount}s"*)
+                mp=$(echo "$line" | sed 's/^[^ ]* on \(.*\) (.*/\1/')
+                if [ -n "$mp" ] && [ "$mp" != "/" ]; then
+                    echo "Unmounting $mp ($dev)..."
+                    umount -f "$mp" 2>/dev/null || true
+                fi
+                ;;
+        esac
     done
 }
 
@@ -170,6 +194,7 @@ set -x
 
 # Cleanup
 umount_recursive
+umount_disk_partitions "$DISK"
 
 echo "Destroying old partition table..."
 gpart destroy -F "$DISK" 2>/dev/null || true
