@@ -65,7 +65,7 @@ umount_recursive() {
     done
 }
 
-# Function: unmount all partitions of a disk and all FUSE filesystems
+# Function: unmount all partitions of a disk
 umount_disk_partitions() {
     disk_to_unmount="$1"
     [ -z "$disk_to_unmount" ] && return
@@ -73,7 +73,7 @@ umount_disk_partitions() {
     mount | while read -r line; do
         dev=$(echo "$line" | cut -d' ' -f1)
         case "$dev" in
-            "$disk_to_unmount" | "${disk_to_unmount}p"* | "${disk_to_unmount}s"* | /dev/fuse* | fusefs*)
+            "$disk_to_unmount" | "${disk_to_unmount}p"* | "${disk_to_unmount}s"*)
                 mp=$(echo "$line" | sed 's/^[^ ]* on \(.*\) (.*)/\1/')
                 if [ -n "$mp" ] && [ "$mp" != "/" ]; then
                     echo "Unmounting $mp ($dev)..."
