@@ -32,7 +32,7 @@ MP=$(mount | while read -r line; do
     case "$line" in
         /dev/da0*)
             echo "$line" | sed 's/^[^ ]* on \(.*\) (.*)/\1/'
-            break
+            exit 0
             ;;
     esac
 done)
