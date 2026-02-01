@@ -325,8 +325,8 @@ configure_lightdm_for_rpi() {
     fi
 
     # Backup once
-    if [ ! -f "${LIGHTDM_CONF}.gershwin.bak" ]; then
-        cp -a "$LIGHTDM_CONF" "${LIGHTDM_CONF}.gershwin.bak" || log "Warning: failed to backup $LIGHTDM_CONF"
+    if [ ! -f "${LIGHTDM_CONF}.bak" ]; then
+        cp -a "$LIGHTDM_CONF" "${LIGHTDM_CONF}.bak" || log "Warning: failed to backup $LIGHTDM_CONF"
     fi
 
     # Comment out autologin-user and pi-greeter lines if present
@@ -438,6 +438,45 @@ configure_systemd_display() {
         create_gershwin_xsession
         create_systemd_loginwindow
     fi
+}
+
+install_amlogic_xorg_conf() {
+    # Install Xorg config for Amlogic/meson devices when panfrost is present
+    if [ "$(uname -s)" != "Linux" ]; then
+        log "Not Linux; skipping Amlogic Xorg configuration"
+        return
+    fi
+
+    if [ ! -d /sys/module/panfrost ]; then
+        log "panfrost module not present; skipping Amlogic Xorg configuration"
+        return
+    fi
+
+    CONF_DIR="/etc/X11/xorg.conf.d"
+    CONF_FILE="$CONF_DIR/01-amlogic.conf"
+    mkdir -p "$CONF_DIR" || log "Warning: failed to create $CONF_DIR"
+
+    cat >"$CONF_FILE".tmp <<'EOF'
+Section "OutputClass"
+    Identifier "Amlogic"
+    MatchDriver "meson"
+    Driver "modesetting"
+    Option "PrimaryGPU" "true"
+EndSection
+EOF
+
+    # Only replace existing file if content differs
+    if [ -f "$CONF_FILE" ]; then
+        if cmp -s "$CONF_FILE" "$CONF_FILE.tmp"; then
+            log "$CONF_FILE already present and up to date"
+            rm -f "$CONF_FILE.tmp"
+            return
+        fi
+    fi
+
+    mv "$CONF_FILE.tmp" "$CONF_FILE" || { log "Warning: failed to move $CONF_FILE.tmp to $CONF_FILE"; rm -f "$CONF_FILE.tmp"; return; }
+    chmod 644 "$CONF_FILE" || log "Warning: failed to chmod $CONF_FILE"
+    log "Installed $CONF_FILE for Amlogic Meson devices"
 }
 
 install_packages() {
@@ -669,6 +708,8 @@ main() {
 
         # Configure systemd / Raspberry Pi OS display options when applicable
         configure_systemd_display
+
+        install_amlogic_xorg_conf
 
         log "Skipping FreeBSD-specific configuration on Debian-like system"
     else
