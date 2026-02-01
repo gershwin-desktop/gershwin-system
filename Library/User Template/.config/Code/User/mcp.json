@@ -1,0 +1,10 @@
+{
+	"servers": {
+		"uibridge": {
+			"type": "stdio",
+			"command": "/System/Library/Tools/UIBridgeServer",
+			"args": []
+		}
+	},
+	"inputs": []
+}
