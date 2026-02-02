@@ -49,6 +49,17 @@ umount_recursive() {
     done
 }
 
+# Temporary mount for live squashfs images (if using ISO as source)
+TMP_LIVE=""
+cleanup_tmp_live() {
+    if [ -n "$TMP_LIVE" ] && mountpoint -q "$TMP_LIVE"; then
+        echo "Unmounting temporary live squashfs at $TMP_LIVE"
+        umount -l "$TMP_LIVE" >/dev/null 2>&1 || true
+        rmdir "$TMP_LIVE" >/dev/null 2>&1 || true
+    fi
+}
+trap cleanup_tmp_live EXIT
+
 # Disk Selection
 if [ -n "$1" ]; then
     DISK="$1"
@@ -193,6 +204,40 @@ fi
 
 # Copying System
 echo "Copying system from $SRC to $MNT..."
+# If src is an ISO that contains a squashfs (live image), prefer filesystem.squashfs or the largest squashfs and mount it
+if mount | grep -q "type iso9660" && [ -n "$SRC" ] && [ -d "$SRC" ]; then
+    echo "Searching for squashfs images under $SRC..."
+
+    # Prefer a file named 'filesystem.squashfs' if present
+    SQUASH_PREF=$(find "$SRC" -maxdepth 6 -type f -iname 'filesystem.squashfs' -print -quit || true)
+    if [ -n "$SQUASH_PREF" ]; then
+        SQUASH_FILE="$SQUASH_PREF"
+        echo "Found preferred squashfs 'filesystem.squashfs' at: $SQUASH_FILE"
+    else
+        # Otherwise pick the largest squashfs file found
+        SQUASH_FILE=$(find "$SRC" -maxdepth 6 -type f -iname '*.squashfs' -printf '%s\t%p\n' | sort -n | tail -n1 | cut -f2- || true)
+        if [ -n "$SQUASH_FILE" ]; then
+            SIZE=$(stat -c%s "$SQUASH_FILE" 2>/dev/null || true)
+            echo "Selected largest squashfs: $SQUASH_FILE (size ${SIZE:-unknown} bytes)"
+        fi
+    fi
+
+    if [ -n "$SQUASH_FILE" ]; then
+        echo "Detected squashfs image at $SQUASH_FILE. Attempting to mount to access live rootfs..."
+        TMP_LIVE=$(mktemp -d /tmp/live-root.XXXXXX)
+        if mount -t squashfs -o loop "$SQUASH_FILE" "$TMP_LIVE" 2>/dev/null; then
+            echo "Mounted squashfs at $TMP_LIVE; using it as source."
+            SRC="$TMP_LIVE"
+        else
+            echo "Warning: Failed to mount $SQUASH_FILE. Proceeding with ISO root ($SRC) instead."
+            rmdir "$TMP_LIVE" >/dev/null 2>&1 || true
+            TMP_LIVE=""
+        fi
+    else
+        echo "No squashfs images found in $SRC; using ISO root ($SRC) as source."
+    fi
+fi
+
 # Excludes (relative to SRC)
 EXCLUDES=(
     "dev/*" "proc/*" "sys/*" "tmp/*" "run/*" "mnt/*" "media/*" "lost+found"
