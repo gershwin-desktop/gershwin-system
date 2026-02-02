@@ -479,6 +479,42 @@ EOF
     log "Installed $CONF_FILE for Amlogic Meson devices"
 }
 
+blacklist_pcspkr() {
+    # Blacklist the pcspkr kernel module on Linux to disable PC speaker beeps
+    if [ "$(uname -s)" != "Linux" ]; then
+        log "Not Linux; skipping pcspkr blacklist"
+        return
+    fi
+
+    BL_CONF="/etc/modprobe.d/blacklist.conf"
+    if [ ! -d "$(dirname "$BL_CONF")" ]; then
+        log "/etc/modprobe.d not present; skipping pcspkr blacklist"
+        return
+    fi
+
+    if [ -f "$BL_CONF" ]; then
+        if grep -qE '^[[:space:]]*blacklist[[:space:]]+pcspkr\b' "$BL_CONF" 2>/dev/null; then
+            log "pcspkr already blacklisted in $BL_CONF"
+            return
+        fi
+        log "Appending 'blacklist pcspkr' to $BL_CONF"
+        {
+            echo ''
+            echo '# Blacklist PC speaker to disable console beeps '
+            echo 'blacklist pcspkr'
+        } >> "$BL_CONF" 2>/dev/null || log "Warning: failed to append to $BL_CONF"
+    else
+        log "Creating $BL_CONF to blacklist pcspkr"
+        cat >"$BL_CONF" <<'EOF'
+# Blacklist PC speaker to disable console beeps
+blacklist pcspkr
+EOF
+        if [ $? -ne 0 ]; then
+            log "Warning: failed to create $BL_CONF"
+        fi
+    fi
+}
+
 install_packages() {
     if is_debian_like; then
         install_debian_packages
@@ -710,6 +746,8 @@ main() {
         configure_systemd_display
 
         install_amlogic_xorg_conf
+
+        blacklist_pcspkr
 
         log "Skipping FreeBSD-specific configuration on Debian-like system"
     else
