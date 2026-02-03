@@ -30,8 +30,7 @@ SRC="/"
 if mount | grep -q "type iso9660"; then
     # Find out where it is mounted
     ISO_MP=$(mount | awk '$5 == "iso9660" {print $3; exit}')
-    echo "Detected ISO9660 filesystem mounted at $ISO_MP." 
-    printf "Found ISO9660 installation media. Use it as source? [Y/n]: "
+    printf "Do you want an image-based installation (copy the contents of %s) instead of copying /? [y/N]: " "$ISO_MP"
     read -r image_ans
     case "$image_ans" in
         [Nn]*) SRC="/" ;;
