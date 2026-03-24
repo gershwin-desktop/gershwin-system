@@ -479,6 +479,45 @@ EOF
     log "Installed $CONF_FILE for Amlogic Meson devices"
 }
 
+enable_dmi_serial_access() {
+    # Make DMI product_serial readable by regular users so "About This Computer"
+    # can display the serial number without requiring root privileges.
+    if [ "$(uname -s)" != "Linux" ]; then
+        log "Not Linux; skipping DMI serial access configuration"
+        return
+    fi
+
+    UDEV_DIR="/etc/udev/rules.d"
+    UDEV_RULE="$UDEV_DIR/70-dmi-serial.rules"
+
+    if [ ! -d "$UDEV_DIR" ]; then
+        log "/etc/udev/rules.d not present; skipping DMI serial access"
+        return
+    fi
+
+    if [ -f "$UDEV_RULE" ]; then
+        log "$UDEV_RULE already exists; skipping"
+        return
+    fi
+
+    log "Creating udev rule to allow user access to DMI product_serial"
+    cat >"$UDEV_RULE" <<'EOF'
+# Allow regular users to read DMI product serial for About This Computer
+SUBSYSTEM=="dmi", ATTR{product_serial}=="?*", RUN+="/bin/chmod 0444 /sys/class/dmi/id/product_serial"
+EOF
+    chmod 644 "$UDEV_RULE" || log "Warning: failed to chmod $UDEV_RULE"
+
+    # Apply immediately if udevadm is available
+    if command -v udevadm >/dev/null 2>&1; then
+        udevadm control --reload-rules 2>/dev/null && udevadm trigger --subsystem-match=dmi 2>/dev/null || log "Warning: failed to reload udev rules"
+    fi
+
+    # Also fix permissions now for the current boot
+    if [ -f /sys/class/dmi/id/product_serial ]; then
+        chmod 0444 /sys/class/dmi/id/product_serial 2>/dev/null || log "Warning: failed to chmod product_serial for current session"
+    fi
+}
+
 blacklist_pcspkr() {
     # Blacklist the pcspkr kernel module on Linux to disable PC speaker beeps
     if [ "$(uname -s)" != "Linux" ]; then
@@ -748,6 +787,8 @@ main() {
         install_amlogic_xorg_conf
 
         blacklist_pcspkr
+
+        enable_dmi_serial_access
 
         log "Skipping FreeBSD-specific configuration on Debian-like system"
     else
