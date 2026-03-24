@@ -91,5 +91,7 @@
     <integer>2</integer>
     <key>dockstyle</key>
     <integer>1</integer>
+    <key>use_thumbnails</key>
+    <true/>
 </dict>
 </plist>
