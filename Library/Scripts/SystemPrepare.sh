@@ -667,10 +667,32 @@ set_binary_setuid() {
     done
 } 
 
+# Enable Directory Services helper so directory users can log in
+enable_dshelper() {
+    log "Enabling dshelper (Directory Services)"
+    if is_freebsd; then
+        sysrc dshelper_enable="YES" || log "Warning: failed to enable dshelper via sysrc"
+    elif is_systemd; then
+        systemctl enable gdomap dshelper || log "Warning: failed to enable gdomap/dshelper via systemctl"
+    elif [ -d /etc/init.d ] && command -v update-rc.d >/dev/null 2>&1; then
+        update-rc.d dshelper defaults || log "Warning: failed to enable dshelper via update-rc.d"
+    else
+        log "No supported init system detected for dshelper"
+    fi
+}
+
 # Enable LoginWindow service so the graphical login is started at boot
 enable_loginwindow() {
     log "Enabling LoginWindow service (graphical login)"
-    service loginwindow enable || log "Warning: failed to enable loginwindow"
+    if is_freebsd; then
+        service loginwindow enable || log "Warning: failed to enable loginwindow via service"
+    elif is_systemd; then
+        systemctl enable loginwindow || log "Warning: failed to enable loginwindow via systemctl"
+    elif is_devuan && [ -d /etc/init.d ]; then
+        create_devuan_loginwindow_init
+    else
+        log "No supported init system detected for loginwindow"
+    fi
 }
 
 # Insert sysctl settings block with explanatory comments
@@ -774,15 +796,14 @@ main() {
     configure_pkg_repo
     install_packages
 
+    # Enable Directory Services and LoginWindow on all platforms
+    enable_dshelper
+    enable_loginwindow
+
     if is_debian_like; then
         # Debian/Devuan-specific steps
         add_users_to_video_group_debian
-        enable_display_manager_debian
-        create_devuan_loginwindow_init
         change_elogind_conf
-
-        # Configure systemd / Raspberry Pi OS display options when applicable
-        configure_systemd_display
 
         install_amlogic_xorg_conf
 
@@ -798,8 +819,6 @@ main() {
 
         add_users_to_video_group
         set_binary_setuid
-
-        enable_loginwindow
 
         add_sysctl_tuning
     fi
