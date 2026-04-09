@@ -584,7 +584,7 @@ install_packages() {
 
 # Load kernel module for Intel GPUs in late boot; required for proper acceleration
 configure_kld_list() {
-    log "Ensuring i915kms is in kld_list (for Intel iGPU support)"
+    log "Ensuring i915kms and fusefs are in kld_list"
 
     if command -v sysrc >/dev/null 2>&1; then
         current_kld_list=$(sysrc -n kld_list 2>/dev/null || true)
@@ -596,11 +596,19 @@ configure_kld_list() {
                 sysrc kld_list+="i915kms" || log "Warning: sysrc failed to update kld_list"
                 ;;
         esac
+        case "$current_kld_list" in
+            *fusefs*)
+                log "fusefs already present in kld_list"
+                ;;
+            *)
+                sysrc kld_list+="fusefs" || log "Warning: sysrc failed to update kld_list"
+                ;;
+        esac
     else
         log "sysrc not available; skipping kld_list update"
     fi
 
-    # Try to load the module now so users don't need to reboot to get basic acceleration
+    # Try to load modules now so users don't need to reboot
     if command -v kldload >/dev/null 2>&1; then
         if kldstat 2>/dev/null | grep -q 'i915kms'; then
             log "i915kms already loaded"
@@ -609,6 +617,15 @@ configure_kld_list() {
                 log "Loaded i915kms module now"
             else
                 log "Warning: failed to load i915kms now; it will be loaded at next boot"
+            fi
+        fi
+        if kldstat 2>/dev/null | grep -q 'fusefs'; then
+            log "fusefs already loaded"
+        else
+            if kldload fusefs >/dev/null 2>&1; then
+                log "Loaded fusefs module now"
+            else
+                log "Warning: failed to load fusefs now; it will be loaded at next boot"
             fi
         fi
     fi
