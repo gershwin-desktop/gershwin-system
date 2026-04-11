@@ -15,6 +15,8 @@
 
 . /System/Library/Makefiles/GNUstep.sh
 
+export DISPLAY=:0
+
 export PATH=$HOME/Library/Tools:/Local/Library/Tools:/System/Library/Tools/:$PATH
 
 # Add our fonts path to fontconfig
