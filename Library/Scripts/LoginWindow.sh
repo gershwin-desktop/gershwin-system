@@ -17,6 +17,8 @@
 
 . /System/Library/Makefiles/GNUstep.sh
 
+export DISPLAY=:0
+
 # Allow non-root users to power off, halt, and reboot the system
 for bin in /sbin/poweroff /sbin/halt /sbin/reboot; do [ -e "$bin" ] && chmod 5755 "$bin"; done
 
