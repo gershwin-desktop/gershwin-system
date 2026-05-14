@@ -339,59 +339,34 @@ ROOT_PART="${DISK}p2"
 mkdir -p "$MNT"
 
 if [ "$IMAGE_MODE" = "0" ]; then
-    # Normal install: a file-level bsdtar copy of the PRISTINE uzip,
-    # mounted as its own clean UFS -- no unionfs anywhere in the read path.
+    # Normal install: a file-level bsdtar copy of the RUNNING LIVE SESSION.
     #
-    # Why not just bsdtar the live union root ("/")? FreeBSD unionfs read
-    # reliability isn't good enough for a full-tree walk -- in testing it
-    # truncated the archive mid-stream. And /dev/md0.uzip can't be mounted
-    # a second time: FFS refuses to mount an already-mounted device, even
-    # read-only ("Device busy"), and it's already the union's lower layer.
+    # The live root is the in-kernel unionfs (read-only uzip lower + tmpfs
+    # writable upper). We bsdtar straight from "/" so that everything done
+    # during the live session -- pkg installs, config changes -- lands on
+    # the installed disk. Copying the pristine uzip instead would silently
+    # drop all of that; capturing the live session is the whole point.
     #
-    # So: the cd9660 boot media DOES allow a second read-only mount (it
-    # has no FFS-style exclusivity check). Re-mount it, reach the uzip
-    # FILE on it, attach that file as a FRESH md device, and mount its
-    # UFS read-only. The result is a standalone, pristine copy source --
-    # the build artifact, free of the live session's tmpfs-upper cruft,
-    # and with no unionfs read path. bsdtar (`tar` on FreeBSD) with
-    # --acls --xattrs --fflags carries the full metadata set and preserves
-    # hardlinks (/rescue), ownership, perms, timestamps, setuid/sticky.
+    # We do NOT use --one-file-system to keep the create-side tar off
+    # other filesystems. On a unionfs its st_dev detection isn't
+    # trustworthy; an earlier attempt relied on it and the create tar
+    # descended into /mnt (the target the extract side is actively
+    # writing), read its own half-written output, and produced a
+    # truncated archive. Instead every mount point and every bit of
+    # live-only cruft is named explicitly:
+    #   ./mnt                          -- the install target (CRITICAL)
+    #   ./dev ./proc ./tmp ./media     -- pseudo / tmpfs mounts
+    #   ./compat/linux/{proc,sys,dev}  -- linprocfs/linsysfs/devfs submounts
+    #   ./var/run ./var/tmp ./var/cache -- stale runtime cruft
+    #   ./etc/rc.conf.local            -- the live-only root_rw_mount="NO"
+    #                                     override init_script writes into
+    #                                     the tmpfs upper
+    # bsdtar (`tar` on FreeBSD) with --acls --xattrs --fflags carries the
+    # full metadata set and preserves hardlinks (/rescue), ownership,
+    # perms, timestamps, setuid/setgid/sticky.
     if [ ! -e /dev/md0.uzip ]; then
         echo "ERROR: /dev/md0.uzip not found."
         echo "The installer must be run from a booted Gershwin live ISO."
-        exit 1
-    fi
-
-    # Re-mount the cd9660 boot media read-only to reach the uzip file.
-    CD_SRC=$(mktemp -d /tmp/cd-src.XXXXXX)
-    if ! mount -t cd9660 -o ro /dev/iso9660/FREEBSD "$CD_SRC"; then
-        echo "ERROR: could not mount the cd9660 boot media at /dev/iso9660/FREEBSD."
-        rmdir "$CD_SRC" 2>/dev/null || true
-        exit 1
-    fi
-    if [ ! -f "$CD_SRC/boot/rootfs.uzip" ]; then
-        echo "ERROR: $CD_SRC/boot/rootfs.uzip not found on the boot media."
-        umount "$CD_SRC" 2>/dev/null || true
-        rmdir "$CD_SRC" 2>/dev/null || true
-        exit 1
-    fi
-
-    # Attach the uzip file as a fresh md device; geom_uzip auto-tastes it
-    # and exposes <md>.uzip (the decompressed UFS).
-    UZ_MD=$(mdconfig -a -t vnode -o readonly -f "$CD_SRC/boot/rootfs.uzip")
-    i=0
-    while [ ! -e "/dev/${UZ_MD}.uzip" ]; do
-        sleep 1
-        i=$((i + 1))
-        if [ "$i" -gt 15 ]; then
-            break
-        fi
-    done
-    UZIP_SRC=$(mktemp -d /tmp/uzip-src.XXXXXX)
-    if ! mount -t ufs -o ro "/dev/${UZ_MD}.uzip" "$UZIP_SRC"; then
-        echo "ERROR: could not mount the uzip UFS (/dev/${UZ_MD}.uzip)."
-        mdconfig -d -u "$UZ_MD" 2>/dev/null || true
-        umount "$CD_SRC" 2>/dev/null || true
         exit 1
     fi
 
@@ -405,19 +380,26 @@ if [ "$IMAGE_MODE" = "0" ]; then
         mount -t msdosfs "$EFI_PART" "$MNT/efi"
     fi
 
-    report_progress "Copying" 30 "Copying pristine system to $MNT..."
-    echo "Copying pristine system to $MNT ..."
-    ( cd "$UZIP_SRC" && tar --acls --xattrs --fflags -cf - . ) \
-        | ( cd "$MNT" && tar --acls --xattrs --fflags -xpf - )
+    report_progress "Copying" 30 "Copying live system to $MNT..."
+    echo "Copying live system to $MNT ..."
+    ( cd / && tar --acls --xattrs --fflags \
+        --exclude=./mnt \
+        --exclude=./dev --exclude=./proc --exclude=./tmp --exclude=./media \
+        --exclude=./compat/linux/proc --exclude=./compat/linux/sys \
+        --exclude=./compat/linux/dev \
+        --exclude=./var/run --exclude=./var/tmp --exclude=./var/cache \
+        --exclude=./etc/rc.conf.local \
+        -cf - . ) | ( cd "$MNT" && tar --acls --xattrs --fflags -xpf - )
     report_progress "Copying" 80 "File copy complete."
 
-    # Tear down the temporary uzip + cd9660 mounts (order matters: the md
-    # device is backed by a file on the cd9660).
-    umount "$UZIP_SRC" 2>/dev/null || true
-    rmdir "$UZIP_SRC" 2>/dev/null || true
-    mdconfig -d -u "$UZ_MD" 2>/dev/null || true
-    umount "$CD_SRC" 2>/dev/null || true
-    rmdir "$CD_SRC" 2>/dev/null || true
+    # Recreate the excluded mount-point / runtime dirs as empty so the
+    # installed system's rc can mount over them.
+    for d in mnt dev proc tmp media \
+             compat/linux/proc compat/linux/sys compat/linux/dev/shm \
+             var/run var/tmp var/cache; do
+        mkdir -p "$MNT/$d"
+    done
+    chmod 1777 "$MNT/tmp" 2>/dev/null || true
 else
     # Image-based install: tree-copy from the mounted source. newfs the
     # target, then rsync (preferred) or a tar pipe. The old `cp -a`
