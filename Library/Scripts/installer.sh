@@ -339,21 +339,29 @@ ROOT_PART="${DISK}p2"
 mkdir -p "$MNT"
 
 if [ "$IMAGE_MODE" = "0" ]; then
-    # Normal install: a file-level bsdtar copy of the pristine uzip.
+    # Normal install: a file-level bsdtar copy of the running live system.
     #
-    # /dev/md0.uzip is the read-only UFS that the live system is a unionfs
-    # over -- the build artifact, free of the live session's tmpfs-upper
-    # cruft (stale pidfiles, the live-only root_rw_mount override, ...).
-    # We mount it read-only at a temp point and bsdtar from there rather
-    # than walking the live union mount: that keeps the copy off unionfs's
-    # readdir (historically buggy) and means no fragile exclude list --
-    # the source is a clean static image. `tar` is bsdtar on FreeBSD;
-    # --acls --xattrs --fflags carry the full metadata set (ACLs, extended
-    # attributes, BSD file flags), and bsdtar preserves hardlinks (/rescue),
-    # ownership, perms, timestamps, setuid/setgid/sticky by construction.
-    UZIP_DEV="/dev/md0.uzip"
-    if [ ! -e "$UZIP_DEV" ]; then
-        echo "ERROR: $UZIP_DEV not found."
+    # The live root is the in-kernel unionfs (read-only uzip lower + tmpfs
+    # writable upper). We bsdtar straight from "/": the uzip device is
+    # already mounted as the union's lower and cannot be mounted a second
+    # time ("Device busy"), so there is no separate pristine mount to copy
+    # from -- we walk the union the running system already uses.
+    #
+    # --one-file-system keeps the walk on the union and off every
+    # sub-mount (devfs, procfs, the tmpfs /tmp, the target at /mnt, the
+    # linprocfs/linsysfs under /compat). The only things that still need
+    # explicit excludes are live-session cruft *within* the union:
+    #   var/run   -- stale runtime pidfiles (the original installer bug)
+    #   var/tmp, var/cache
+    #   etc/rc.conf.local -- the live-only root_rw_mount="NO" override that
+    #                        init_script writes into the tmpfs upper; the
+    #                        uzip has no rc.conf.local, so excluding the
+    #                        whole file is correct.
+    # bsdtar (`tar` on FreeBSD) with --acls --xattrs --fflags carries the
+    # full metadata set and preserves hardlinks (/rescue), ownership,
+    # perms, timestamps, and setuid/setgid/sticky by construction.
+    if [ ! -e /dev/md0.uzip ]; then
+        echo "ERROR: /dev/md0.uzip not found."
         echo "The installer must be run from a booted Gershwin live ISO."
         exit 1
     fi
@@ -368,18 +376,19 @@ if [ "$IMAGE_MODE" = "0" ]; then
         mount -t msdosfs "$EFI_PART" "$MNT/efi"
     fi
 
-    # Mount the pristine uzip read-only as the copy source.
-    UZIP_SRC=$(mktemp -d /tmp/uzip-src.XXXXXX)
-    mount -t ufs -o ro "$UZIP_DEV" "$UZIP_SRC"
-
-    report_progress "Copying" 30 "Copying system from $UZIP_DEV to $MNT..."
-    echo "Copying pristine system ($UZIP_DEV) to $MNT ..."
-    ( cd "$UZIP_SRC" && tar --acls --xattrs --fflags --one-file-system -cf - . ) \
-        | ( cd "$MNT" && tar --acls --xattrs --fflags -xpf - )
+    report_progress "Copying" 30 "Copying system to $MNT..."
+    echo "Copying live system to $MNT ..."
+    ( cd / && tar --acls --xattrs --fflags --one-file-system \
+        --exclude=./var/run --exclude=./var/tmp --exclude=./var/cache \
+        --exclude=./etc/rc.conf.local \
+        -cf - . ) | ( cd "$MNT" && tar --acls --xattrs --fflags -xpf - )
     report_progress "Copying" 80 "File copy complete."
 
-    umount "$UZIP_SRC" 2>/dev/null || true
-    rmdir "$UZIP_SRC" 2>/dev/null || true
+    # Recreate the excluded / mount-point runtime dirs as empty.
+    for d in dev proc tmp mnt var/run var/tmp var/cache; do
+        mkdir -p "$MNT/$d"
+    done
+    chmod 1777 "$MNT/tmp" 2>/dev/null || true
 else
     # Image-based install: tree-copy from the mounted source. newfs the
     # target, then rsync (preferred) or a tar pipe. The old `cp -a`
