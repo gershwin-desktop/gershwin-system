@@ -339,13 +339,18 @@ ROOT_PART="${DISK}p2"
 mkdir -p "$MNT"
 
 if [ "$IMAGE_MODE" = "0" ]; then
-    # Normal install: dd the pristine uzip UFS straight onto the target,
-    # then grow it to fill the partition. /dev/md0.uzip is the read-only
-    # UFS that the live system is a unionfs over -- a bit-exact copy of the
-    # build artifact, with none of the live session's tmpfs-upper cruft
-    # (stale pidfiles, the live-only root_rw_mount override, ...). Hardlinks
-    # (/rescue) are preserved automatically: dd copies the filesystem image
-    # block-for-block, it does not walk the tree.
+    # Normal install: a file-level bsdtar copy of the pristine uzip.
+    #
+    # /dev/md0.uzip is the read-only UFS that the live system is a unionfs
+    # over -- the build artifact, free of the live session's tmpfs-upper
+    # cruft (stale pidfiles, the live-only root_rw_mount override, ...).
+    # We mount it read-only at a temp point and bsdtar from there rather
+    # than walking the live union mount: that keeps the copy off unionfs's
+    # readdir (historically buggy) and means no fragile exclude list --
+    # the source is a clean static image. `tar` is bsdtar on FreeBSD;
+    # --acls --xattrs --fflags carry the full metadata set (ACLs, extended
+    # attributes, BSD file flags), and bsdtar preserves hardlinks (/rescue),
+    # ownership, perms, timestamps, setuid/setgid/sticky by construction.
     UZIP_DEV="/dev/md0.uzip"
     if [ ! -e "$UZIP_DEV" ]; then
         echo "ERROR: $UZIP_DEV not found."
@@ -353,32 +358,28 @@ if [ "$IMAGE_MODE" = "0" ]; then
         exit 1
     fi
 
-    # Refuse to dd onto a partition smaller than the image rather than
-    # failing half-way and leaving a partitioned-but-broken disk.
-    UZIP_BYTES=$(diskinfo "$UZIP_DEV" 2>/dev/null | awk '{print $3}')
-    PART_BYTES=$(diskinfo "$ROOT_PART" 2>/dev/null | awk '{print $3}')
-    if [ -n "$UZIP_BYTES" ] && [ -n "$PART_BYTES" ] && \
-       awk -v u="$UZIP_BYTES" -v p="$PART_BYTES" 'BEGIN { exit !(u > p) }' 2>/dev/null; then
-        echo "ERROR: target root partition ($PART_BYTES bytes) is smaller than the system image ($UZIP_BYTES bytes)."
-        exit 1
-    fi
+    report_progress "Formatting" 20 "Formatting root filesystem..."
+    newfs -U "$ROOT_PART"
 
-    report_progress "Copying" 30 "Cloning system image to $ROOT_PART..."
-    echo "Cloning $UZIP_DEV -> $ROOT_PART ..."
-    dd if="$UZIP_DEV" of="$ROOT_PART" bs=1m
-
-    report_progress "Copying" 78 "Expanding filesystem to fill the partition..."
-    echo "Growing $ROOT_PART ..."
-    growfs -y "$ROOT_PART"
-    report_progress "Copying" 80 "System image cloned."
-
-    # Mount the freshly-cloned root.
-    report_progress "Mounting" 81 "Mounting target filesystems..."
+    report_progress "Mounting" 22 "Mounting target filesystems..."
     mount "$ROOT_PART" "$MNT"
     if [ "$BOOT_METHOD" = "UEFI" ]; then
         mkdir -p "$MNT/efi"
         mount -t msdosfs "$EFI_PART" "$MNT/efi"
     fi
+
+    # Mount the pristine uzip read-only as the copy source.
+    UZIP_SRC=$(mktemp -d /tmp/uzip-src.XXXXXX)
+    mount -t ufs -o ro "$UZIP_DEV" "$UZIP_SRC"
+
+    report_progress "Copying" 30 "Copying system from $UZIP_DEV to $MNT..."
+    echo "Copying pristine system ($UZIP_DEV) to $MNT ..."
+    ( cd "$UZIP_SRC" && tar --acls --xattrs --fflags --one-file-system -cf - . ) \
+        | ( cd "$MNT" && tar --acls --xattrs --fflags -xpf - )
+    report_progress "Copying" 80 "File copy complete."
+
+    umount "$UZIP_SRC" 2>/dev/null || true
+    rmdir "$UZIP_SRC" 2>/dev/null || true
 else
     # Image-based install: tree-copy from the mounted source. newfs the
     # target, then rsync (preferred) or a tar pipe. The old `cp -a`
