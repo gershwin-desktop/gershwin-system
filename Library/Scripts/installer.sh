@@ -121,6 +121,7 @@ if [ "$LIST_DISKS" = "1" ]; then
 fi
 
 # Determine if /dev/da0 is mounted and offer image-based installation only if it is
+IMAGE_MODE=0
 if [ -n "$ARG_SOURCE" ]; then
     SRC="$ARG_SOURCE"
 else
@@ -136,6 +137,7 @@ else
         if [ "$NONINTERACTIVE" = "1" ]; then
             echo "Image-based install: copying from $MP"
             SRC="$MP"
+            IMAGE_MODE=1
         else
             printf "Do you want an image-based installation (copy the contents of %s) instead of copying /? [y/N]: " "$MP"
             read -r image_ans
@@ -143,6 +145,7 @@ else
                 [Yy]*)
                     echo "Image-based install: copying from $MP"
                     SRC="$MP"
+                    IMAGE_MODE=1
                     ;;
                 *) SRC="/" ;;
             esac
@@ -359,6 +362,17 @@ echo "Copying system from $SRC to $MNT..."
 
 # Exclude runtime dirs
 EXCLUDES="dev proc sys tmp mnt media efi run var/run var/tmp var/cache compat"
+
+# For non-image installations, also exclude /Local (it will be initialized with dscli init
+# because DirectoryServices requires specific permissions and ownership that are hard to preserve during copying)
+# and /boot (it will be copied from the ISO)
+if [ "$IMAGE_MODE" = "0" ]; then
+    EXCLUDES="$EXCLUDES Local"
+    if [ -n "$MP" ]; then
+        EXCLUDES="$EXCLUDES boot"
+    fi
+fi
+
 EXCLUDE_ARGS=""
 for d in $EXCLUDES; do
     EXCLUDE_ARGS="$EXCLUDE_ARGS --exclude=$d"
@@ -401,8 +415,26 @@ for d in $EXCLUDES; do
     mkdir -p "$MNT/$d"
 done
 
+# For non-image installations, copy /boot from the ISO
+if [ "$IMAGE_MODE" = "0" ] && [ -n "$MP" ]; then
+    if [ -d "$MP/boot" ]; then
+        report_progress "Copying" 82 "Copying boot files from ISO..."
+        echo "Copying /boot from ISO location $MP..."
+        mkdir -p "$MNT/boot"
+        cp -a "$MP/boot"/* "$MNT/boot/"
+    fi
+fi
+
+# For non-image installations, initialize /Local with dscli init in chroot
+# This creates the default user "admin" with password "admin" and sets up DirectoryServices properly
+if [ "$IMAGE_MODE" = "0" ]; then
+    report_progress "Finalizing" 84 "Initializing system with dscli init..."
+    echo "Running dscli init in chroot..."
+    chroot "$MNT" /System/Library/Tools/dscli init || true
+fi
+
 # Install bootloader
-report_progress "Bootloader" 82 "Installing bootloader..."
+report_progress "Bootloader" 86 "Installing bootloader..."
 if [ "$BOOT_METHOD" = "UEFI" ]; then
     echo "Installing UEFI bootloader..."
     mkdir -p "$MNT/efi/EFI/BOOT"
@@ -411,7 +443,7 @@ if [ "$BOOT_METHOD" = "UEFI" ]; then
     cp /boot/loader.efi "$MNT/efi/EFI/freebsd/loader.efi"
 
     # Register boot entry
-    report_progress "Bootloader" 86 "Registering UEFI boot entry..."
+    report_progress "Bootloader" 90 "Registering UEFI boot entry..."
     echo "Registering UEFI boot entry..."
     # Mount EFI partition to /boot/efi temporarily to help efibootmgr translate path
     umount "$MNT/efi"
@@ -430,7 +462,7 @@ else
 fi
 
 # Write fstab
-report_progress "Configuration" 90 "Writing filesystem table..."
+report_progress "Configuration" 94 "Writing filesystem table..."
 cat > "$MNT/etc/fstab" <<EOF
 $ROOT_PART   /      ufs   rw   1 1
 EOF
@@ -444,7 +476,7 @@ proc         /proc  procfs rw  0 0
 EOF
 
 # Configure loader
-report_progress "Configuration" 93 "Configuring boot loader..."
+report_progress "Configuration" 97 "Configuring boot loader..."
 cat >> "$MNT/boot/loader.conf" <<EOF
 nvme_load="YES"
 vfs.root.mountfrom="ufs:$ROOT_PART"
