@@ -429,6 +429,10 @@ fi
 # This creates the default user "admin" with password "admin" and sets up DirectoryServices properly
 if [ "$IMAGE_MODE" = "0" ]; then
     report_progress "Finalizing" 84 "Initializing system with dscli init..."
+    if [ -d "$MNT/Local" ]; then
+        echo "Wiping existing /Local in chroot before dscli init..."
+        rm -rf "$MNT/Local"
+    fi
     echo "Running dscli init in chroot..."
     chroot "$MNT" /System/Library/Tools/dscli init || true
 fi
