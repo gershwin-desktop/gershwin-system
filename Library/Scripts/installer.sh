@@ -137,7 +137,7 @@ else
         if [ "$NONINTERACTIVE" = "1" ]; then
             echo "Image-based install: copying from $MP"
             SRC="$MP"
-            IMAGE_MODE=1
+            IMAGE_MODE=0
         else
             printf "Do you want an image-based installation (copy the contents of %s) instead of copying /? [y/N]: " "$MP"
             read -r image_ans
