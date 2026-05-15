@@ -330,108 +330,197 @@ else
     gpart bootcode -b /boot/pmbr -p /boot/gptboot -i 1 "$DISK"
 fi
 
-# Create UFS root
+# Create UFS root partition
 report_progress "Partitioning" 18 "Creating root partition..."
 echo "Creating UFS root partition..."
 gpart add -t freebsd-ufs "$DISK"
 ROOT_PART="${DISK}p2"
-report_progress "Formatting" 20 "Formatting root filesystem..."
-newfs -U "$ROOT_PART"
 
-# Mount filesystems
-report_progress "Mounting" 22 "Mounting target filesystems..."
-echo "Mounting target..."
 mkdir -p "$MNT"
-mount "$ROOT_PART" "$MNT"
 
-if [ "$BOOT_METHOD" = "UEFI" ]; then
-    mkdir -p "$MNT/efi"
-    mount -t msdosfs "$EFI_PART" "$MNT/efi"
-fi
-
-# Create all needed directories
-report_progress "Mounting" 24 "Creating directory structure..."
-echo "Creating directories..."
-for d in dev proc run tmp var/run var/tmp var/cache; do
-    mkdir -p "$MNT/$d"
-done
-chmod 1777 "$MNT/tmp" "$MNT/var/tmp"
-
-report_progress "Copying" 25 "Starting system copy from $SRC..."
-echo "Copying system from $SRC to $MNT..."
-
-# Exclude runtime dirs
-EXCLUDES="dev proc sys tmp mnt media efi run var/run var/tmp var/cache compat"
-
-# For non-image installations, also exclude /Local (it will be initialized with dscli init
-# because DirectoryServices requires specific permissions and ownership that are hard to preserve during copying)
-# and /boot (it will be copied from the ISO)
 if [ "$IMAGE_MODE" = "0" ]; then
-    EXCLUDES="$EXCLUDES Local"
-    if [ -n "$MP" ]; then
-        EXCLUDES="$EXCLUDES boot"
+    # Normal install: a file-level copy of the RUNNING LIVE SESSION.
+    #
+    # The live root is the in-kernel unionfs (read-only uzip lower + tmpfs
+    # writable upper). We copy straight from "/" so that everything done
+    # during the live session -- pkg installs, config changes -- lands on
+    # the installed disk. Copying the pristine uzip instead would silently
+    # drop all of that; capturing the live session is the whole point.
+    #
+    # The copy is done with `find | cpio -pdmu`, NOT bsdtar. FreeBSD 15
+    # unionfs has a bug reading lower-layer symlinks: readlink() through
+    # the union intermittently returns EINVAL/EBADF with garbage metadata.
+    # bsdtar/libarchive treats that as fatal and aborts the whole archive
+    # (observed: a 155k-file system truncated to ~137 files, every run).
+    # cpio treats it as a per-file warning -- it skips that one entry and
+    # keeps going -- so the copy completes. cpio -pdmu preserves hardlinks
+    # (/rescue), file flags (schg), setuid/setgid/sticky, ownership, perms
+    # and mtime (all verified on the live ISO).
+    #
+    # find is given an explicit prune list rather than relying on -x
+    # alone, because unionfs st_dev detection isn't trustworthy. Every
+    # mount point and bit of live-only cruft is named:
+    #   /mnt                          -- the install target (CRITICAL:
+    #                                    never walk the tree we are
+    #                                    actively writing into)
+    #   /dev /proc /tmp /media        -- pseudo / tmpfs mounts
+    #   /compat/linux/{proc,sys,dev}  -- linprocfs/linsysfs/devfs submounts
+    #   /var/run /var/tmp /var/cache  -- stale runtime cruft
+    #   /etc/rc.conf.local            -- the live-only root_rw_mount="NO"
+    #                                    override init_script writes into
+    #                                    the tmpfs upper
+    #
+    # Stage 2 re-walks the symlinks and recreates any that cpio's stage-1
+    # pass dropped to the unionfs bug. A dedicated readlink() sweep (with
+    # a short retry) reliably reads symlinks that are flaky under cpio's
+    # access pattern -- a full census read all 7,657 with zero failures.
+    if [ ! -e /dev/md0.uzip ]; then
+        echo "ERROR: /dev/md0.uzip not found."
+        echo "The installer must be run from a booted Gershwin live ISO."
+        exit 1
     fi
-fi
 
-EXCLUDE_ARGS=""
-for d in $EXCLUDES; do
-    EXCLUDE_ARGS="$EXCLUDE_ARGS --exclude=$d"
-done
+    report_progress "Formatting" 20 "Formatting root filesystem..."
+    newfs -U "$ROOT_PART"
 
-# POSIX-safe cp -a with excludes using rsync if available, else fallback to find+cp
-if command -v rsync >/dev/null 2>&1; then
+    report_progress "Mounting" 22 "Mounting target filesystems..."
+    mount "$ROOT_PART" "$MNT"
+    if [ "$BOOT_METHOD" = "UEFI" ]; then
+        mkdir -p "$MNT/efi"
+        mount -t msdosfs "$EFI_PART" "$MNT/efi"
+    fi
+
+    # Shared prune expression for both the cpio copy and the symlink
+    # sweep -- keep the two stages in sync by using the same $PRUNE.
+    PRUNE="-path /mnt -prune -o -path /dev -prune -o -path /proc -prune -o"
+    PRUNE="$PRUNE -path /tmp -prune -o -path /media -prune -o"
+    PRUNE="$PRUNE -path /compat/linux/proc -prune -o -path /compat/linux/sys -prune -o -path /compat/linux/dev -prune -o"
+    PRUNE="$PRUNE -path /var/run -prune -o -path /var/tmp -prune -o -path /var/cache -prune -o"
+    PRUNE="$PRUNE -path /etc/rc.conf.local -prune -o"
+
+    # The devd-suppression workaround at the top of this script mounts an
+    # empty tmpfs over /usr/local/sbin. Unmount it before the copy so the
+    # real package binaries there (cupsd, avahi-daemon, blkid, automount,
+    # ...) are captured -- otherwise find walks the empty tmpfs and the
+    # installed system is missing all of /usr/local/sbin. Partitioning is
+    # done and the target is already mounted, so devd is no longer a
+    # concern; clearing MOUNTED_TMPFS keeps the EXIT trap from retrying.
+    if [ "$MOUNTED_TMPFS" = "1" ]; then
+        umount /usr/local/sbin 2>/dev/null || true
+        MOUNTED_TMPFS=0
+    fi
+
+    report_progress "Copying" 30 "Copying live system to $MNT..."
+    echo "Copying live system to $MNT (find | cpio) ..."
+    # cpio exits non-zero when it skips entries (the unionfs symlink bug),
+    # which is expected and handled by the stage-2 sweep -- so don't let
+    # set -e abort here. The critical-path check below catches a real
+    # (catastrophic) copy failure instead.
+    set +e
     # shellcheck disable=SC2086
-    rsync -aHAX --info=progress2 $EXCLUDE_ARGS "${SRC%/}/" "$MNT" 2>&1 | \
-    while IFS= read -r line; do
-        echo "$line"
-        # Parse rsync progress output for percentage
-        pct=$(echo "$line" | sed -n 's/.*[[:space:]]\([0-9]*\)%.*/\1/p')
-        if [ -n "$pct" ]; then
-            # Scale rsync 0-100% to our 25-80% range
-            scaled=$(awk -v p="$pct" 'BEGIN { printf "%d", 25 + (p * 55 / 100) }')
-            report_progress "Copying" "$scaled" "Copying files... ${pct}%"
+    find -x / $PRUNE -print 2>/dev/null | cpio -pdmu "$MNT"
+    set -e
+    for p in bin/sh sbin/init etc/rc boot/kernel/kernel usr/bin/login lib/libc.so.7; do
+        if [ ! -e "$MNT/$p" ]; then
+            echo "ERROR: copy incomplete -- $MNT/$p is missing after cpio."
+            exit 1
         fi
     done
-else
-    # fallback
-    report_progress "Copying" 30 "Copying files (fallback mode)..."
-    cd "$SRC"
-    for item in * .*; do
-        # Skip '.' and '..'
-        if [ "$item" = "." ] || [ "$item" = ".." ]; then continue; fi
-        # Skip excluded dirs
-        skip=0
-        for e in $EXCLUDES; do
-            [ "$item" = "$e" ] && skip=1
+    report_progress "Copying" 78 "File copy complete; repairing symlinks..."
+
+    # Stage 2: recreate any symlinks cpio dropped to the unionfs bug.
+    set +e
+    # shellcheck disable=SC2086
+    find -x / $PRUNE -type l -print 2>/dev/null | while IFS= read -r l; do
+        [ -L "$MNT$l" ] && continue
+        tgt=""
+        n=0
+        while [ -z "$tgt" ] && [ "$n" -lt 3 ]; do
+            tgt=$(readlink "$l" 2>/dev/null)
+            n=$((n + 1))
         done
-        [ "$skip" -eq 1 ] && continue
-        cp -a "$item" "$MNT/" || true
+        if [ -n "$tgt" ]; then
+            mkdir -p "$MNT$(dirname "$l")"
+            ln -sf "$tgt" "$MNT$l"
+        else
+            echo "WARNING: unreadable symlink $l -- not recreated on target" >&2
+        fi
     done
-    report_progress "Copying" 80 "File copy complete."
-fi
+    set -e
+    report_progress "Copying" 80 "Symlink repair complete."
 
-# Create the directories we skipped during copying
-for d in $EXCLUDES; do
-    mkdir -p "$MNT/$d"
-done
+    # Recreate the excluded mount-point / runtime dirs as empty so the
+    # installed system's rc can mount over them.
+    for d in mnt dev proc tmp media \
+             compat/linux/proc compat/linux/sys compat/linux/dev/shm \
+             var/run var/tmp var/cache; do
+        mkdir -p "$MNT/$d"
+    done
+    chmod 1777 "$MNT/tmp" 2>/dev/null || true
+else
+    # Image-based install: tree-copy from the mounted source. newfs the
+    # target, then rsync (preferred) or a tar pipe. The old `cp -a`
+    # fallback is gone -- FreeBSD cp does not preserve hardlinks (it would
+    # explode /rescue) and has no exclude mechanism; tar handles both.
+    report_progress "Formatting" 20 "Formatting root filesystem..."
+    newfs -U "$ROOT_PART"
 
-# For non-image installations, copy /boot from the ISO
-if [ "$IMAGE_MODE" = "0" ] && [ -n "$MP" ]; then
-    if [ -d "$MP/boot" ]; then
-        report_progress "Copying" 82 "Copying boot files from ISO..."
-        echo "Copying /boot from ISO location $MP..."
-        mkdir -p "$MNT/boot"
-        cp -a "$MP/boot"/* "$MNT/boot/"
+    report_progress "Mounting" 22 "Mounting target filesystems..."
+    echo "Mounting target..."
+    mount "$ROOT_PART" "$MNT"
+    if [ "$BOOT_METHOD" = "UEFI" ]; then
+        mkdir -p "$MNT/efi"
+        mount -t msdosfs "$EFI_PART" "$MNT/efi"
     fi
+
+    report_progress "Mounting" 24 "Creating directory structure..."
+    for d in dev proc run tmp var/run var/tmp var/cache; do
+        mkdir -p "$MNT/$d"
+    done
+    chmod 1777 "$MNT/tmp" "$MNT/var/tmp"
+
+    report_progress "Copying" 25 "Starting system copy from $SRC..."
+    echo "Copying system from $SRC to $MNT..."
+
+    # Runtime dirs that must not be copied from the source tree.
+    EXCLUDES="dev proc sys tmp mnt media efi run var/run var/tmp var/cache compat"
+    EXCLUDE_ARGS=""
+    TAR_EXCLUDE_ARGS=""
+    for d in $EXCLUDES; do
+        EXCLUDE_ARGS="$EXCLUDE_ARGS --exclude=$d"
+        TAR_EXCLUDE_ARGS="$TAR_EXCLUDE_ARGS --exclude=./$d"
+    done
+
+    if command -v rsync >/dev/null 2>&1; then
+        # shellcheck disable=SC2086
+        rsync -aHAX --info=progress2 $EXCLUDE_ARGS "${SRC%/}/" "$MNT" 2>&1 | \
+        while IFS= read -r line; do
+            echo "$line"
+            pct=$(echo "$line" | sed -n 's/.*[[:space:]]\([0-9]*\)%.*/\1/p')
+            if [ -n "$pct" ]; then
+                scaled=$(awk -v p="$pct" 'BEGIN { printf "%d", 25 + (p * 55 / 100) }')
+                report_progress "Copying" "$scaled" "Copying files... ${pct}%"
+            fi
+        done
+    else
+        report_progress "Copying" 30 "Copying files (tar)..."
+        # shellcheck disable=SC2086
+        ( cd "$SRC" && tar -cf - $TAR_EXCLUDE_ARGS . ) | ( cd "$MNT" && tar -xpf - )
+        report_progress "Copying" 80 "File copy complete."
+    fi
+
+    # Recreate the excluded runtime dirs as empty mount points.
+    for d in $EXCLUDES; do
+        mkdir -p "$MNT/$d"
+    done
 fi
 
-# For non-image installations, initialize /Local with dscli init in chroot
-# This creates the default user "admin" with password "admin" and sets up DirectoryServices properly
-if [ "$IMAGE_MODE" = "0" ]; then
-    report_progress "Finalizing" 84 "Initializing system with dscli init..."
-    echo "Running dscli init in chroot..."
-    chroot "$MNT" /System/Library/Tools/dscli init || true
-fi
+# Initialize Directory Services. dscli init is idempotent -- on the dd
+# path /Local is already present (bit-exact from the uzip) and this just
+# re-asserts nsswitch/sudoers; on the image path it sets /Local up fresh.
+report_progress "Finalizing" 84 "Initializing Directory Services..."
+echo "Running dscli init in chroot..."
+chroot "$MNT" /System/Library/Tools/dscli init || true
 
 # Install bootloader
 report_progress "Bootloader" 86 "Installing bootloader..."
@@ -463,17 +552,28 @@ fi
 
 # Write fstab
 report_progress "Configuration" 94 "Writing filesystem table..."
-cat > "$MNT/etc/fstab" <<EOF
-$ROOT_PART   /      ufs   rw   1 1
-EOF
-if [ "$BOOT_METHOD" = "UEFI" ]; then
-    cat >> "$MNT/etc/fstab" <<EOF
-$EFI_PART    /efi   msdos rw   0 0
-EOF
+if [ "$IMAGE_MODE" = "0" ]; then
+    # The copied root already carries the live session's /etc/fstab (the
+    # fstab.extra entries: proc, linprocfs, tmpfs /tmp, linsysfs, fdescfs).
+    # Prepend the per-install root and EFI entries so those mounts survive.
+    {
+        echo "$ROOT_PART   /      ufs   rw   1 1"
+        if [ "$BOOT_METHOD" = "UEFI" ]; then
+            echo "$EFI_PART    /efi   msdos rw   0 0"
+        fi
+        [ -f "$MNT/etc/fstab" ] && cat "$MNT/etc/fstab"
+    } > "$MNT/etc/fstab.new"
+    mv "$MNT/etc/fstab.new" "$MNT/etc/fstab"
+else
+    # Image-based install: write a fresh fstab.
+    {
+        echo "$ROOT_PART   /      ufs   rw   1 1"
+        if [ "$BOOT_METHOD" = "UEFI" ]; then
+            echo "$EFI_PART    /efi   msdos rw   0 0"
+        fi
+        echo "proc         /proc  procfs rw  0 0"
+    } > "$MNT/etc/fstab"
 fi
-cat >> "$MNT/etc/fstab" <<EOF
-proc         /proc  procfs rw  0 0
-EOF
 
 # Configure loader
 report_progress "Configuration" 97 "Configuring boot loader..."
