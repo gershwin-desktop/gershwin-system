@@ -339,31 +339,41 @@ ROOT_PART="${DISK}p2"
 mkdir -p "$MNT"
 
 if [ "$IMAGE_MODE" = "0" ]; then
-    # Normal install: a file-level bsdtar copy of the RUNNING LIVE SESSION.
+    # Normal install: a file-level copy of the RUNNING LIVE SESSION.
     #
     # The live root is the in-kernel unionfs (read-only uzip lower + tmpfs
-    # writable upper). We bsdtar straight from "/" so that everything done
+    # writable upper). We copy straight from "/" so that everything done
     # during the live session -- pkg installs, config changes -- lands on
     # the installed disk. Copying the pristine uzip instead would silently
     # drop all of that; capturing the live session is the whole point.
     #
-    # We do NOT use --one-file-system to keep the create-side tar off
-    # other filesystems. On a unionfs its st_dev detection isn't
-    # trustworthy; an earlier attempt relied on it and the create tar
-    # descended into /mnt (the target the extract side is actively
-    # writing), read its own half-written output, and produced a
-    # truncated archive. Instead every mount point and every bit of
-    # live-only cruft is named explicitly:
-    #   ./mnt                          -- the install target (CRITICAL)
-    #   ./dev ./proc ./tmp ./media     -- pseudo / tmpfs mounts
-    #   ./compat/linux/{proc,sys,dev}  -- linprocfs/linsysfs/devfs submounts
-    #   ./var/run ./var/tmp ./var/cache -- stale runtime cruft
-    #   ./etc/rc.conf.local            -- the live-only root_rw_mount="NO"
-    #                                     override init_script writes into
-    #                                     the tmpfs upper
-    # bsdtar (`tar` on FreeBSD) with --acls --xattrs --fflags carries the
-    # full metadata set and preserves hardlinks (/rescue), ownership,
-    # perms, timestamps, setuid/setgid/sticky.
+    # The copy is done with `find | cpio -pdmu`, NOT bsdtar. FreeBSD 15
+    # unionfs has a bug reading lower-layer symlinks: readlink() through
+    # the union intermittently returns EINVAL/EBADF with garbage metadata.
+    # bsdtar/libarchive treats that as fatal and aborts the whole archive
+    # (observed: a 155k-file system truncated to ~137 files, every run).
+    # cpio treats it as a per-file warning -- it skips that one entry and
+    # keeps going -- so the copy completes. cpio -pdmu preserves hardlinks
+    # (/rescue), file flags (schg), setuid/setgid/sticky, ownership, perms
+    # and mtime (all verified on the live ISO).
+    #
+    # find is given an explicit prune list rather than relying on -x
+    # alone, because unionfs st_dev detection isn't trustworthy. Every
+    # mount point and bit of live-only cruft is named:
+    #   /mnt                          -- the install target (CRITICAL:
+    #                                    never walk the tree we are
+    #                                    actively writing into)
+    #   /dev /proc /tmp /media        -- pseudo / tmpfs mounts
+    #   /compat/linux/{proc,sys,dev}  -- linprocfs/linsysfs/devfs submounts
+    #   /var/run /var/tmp /var/cache  -- stale runtime cruft
+    #   /etc/rc.conf.local            -- the live-only root_rw_mount="NO"
+    #                                    override init_script writes into
+    #                                    the tmpfs upper
+    #
+    # Stage 2 re-walks the symlinks and recreates any that cpio's stage-1
+    # pass dropped to the unionfs bug. A dedicated readlink() sweep (with
+    # a short retry) reliably reads symlinks that are flaky under cpio's
+    # access pattern -- a full census read all 7,657 with zero failures.
     if [ ! -e /dev/md0.uzip ]; then
         echo "ERROR: /dev/md0.uzip not found."
         echo "The installer must be run from a booted Gershwin live ISO."
@@ -380,17 +390,52 @@ if [ "$IMAGE_MODE" = "0" ]; then
         mount -t msdosfs "$EFI_PART" "$MNT/efi"
     fi
 
+    # Shared prune expression for both the cpio copy and the symlink
+    # sweep -- keep the two stages in sync by using the same $PRUNE.
+    PRUNE="-path /mnt -prune -o -path /dev -prune -o -path /proc -prune -o"
+    PRUNE="$PRUNE -path /tmp -prune -o -path /media -prune -o"
+    PRUNE="$PRUNE -path /compat/linux/proc -prune -o -path /compat/linux/sys -prune -o -path /compat/linux/dev -prune -o"
+    PRUNE="$PRUNE -path /var/run -prune -o -path /var/tmp -prune -o -path /var/cache -prune -o"
+    PRUNE="$PRUNE -path /etc/rc.conf.local -prune -o"
+
     report_progress "Copying" 30 "Copying live system to $MNT..."
-    echo "Copying live system to $MNT ..."
-    ( cd / && tar --acls --xattrs --fflags \
-        --exclude=./mnt \
-        --exclude=./dev --exclude=./proc --exclude=./tmp --exclude=./media \
-        --exclude=./compat/linux/proc --exclude=./compat/linux/sys \
-        --exclude=./compat/linux/dev \
-        --exclude=./var/run --exclude=./var/tmp --exclude=./var/cache \
-        --exclude=./etc/rc.conf.local \
-        -cf - . ) | ( cd "$MNT" && tar --acls --xattrs --fflags -xpf - )
-    report_progress "Copying" 80 "File copy complete."
+    echo "Copying live system to $MNT (find | cpio) ..."
+    # cpio exits non-zero when it skips entries (the unionfs symlink bug),
+    # which is expected and handled by the stage-2 sweep -- so don't let
+    # set -e abort here. The critical-path check below catches a real
+    # (catastrophic) copy failure instead.
+    set +e
+    # shellcheck disable=SC2086
+    find -x / $PRUNE -print 2>/dev/null | cpio -pdmu "$MNT"
+    set -e
+    for p in bin/sh sbin/init etc/rc boot/kernel/kernel usr/bin/login lib/libc.so.7; do
+        if [ ! -e "$MNT/$p" ]; then
+            echo "ERROR: copy incomplete -- $MNT/$p is missing after cpio."
+            exit 1
+        fi
+    done
+    report_progress "Copying" 78 "File copy complete; repairing symlinks..."
+
+    # Stage 2: recreate any symlinks cpio dropped to the unionfs bug.
+    set +e
+    # shellcheck disable=SC2086
+    find -x / $PRUNE -type l -print 2>/dev/null | while IFS= read -r l; do
+        [ -L "$MNT$l" ] && continue
+        tgt=""
+        n=0
+        while [ -z "$tgt" ] && [ "$n" -lt 3 ]; do
+            tgt=$(readlink "$l" 2>/dev/null)
+            n=$((n + 1))
+        done
+        if [ -n "$tgt" ]; then
+            mkdir -p "$MNT$(dirname "$l")"
+            ln -sf "$tgt" "$MNT$l"
+        else
+            echo "WARNING: unreadable symlink $l -- not recreated on target" >&2
+        fi
+    done
+    set -e
+    report_progress "Copying" 80 "Symlink repair complete."
 
     # Recreate the excluded mount-point / runtime dirs as empty so the
     # installed system's rc can mount over them.
@@ -496,9 +541,9 @@ fi
 # Write fstab
 report_progress "Configuration" 94 "Writing filesystem table..."
 if [ "$IMAGE_MODE" = "0" ]; then
-    # The dd'd root already carries the uzip's /etc/fstab (the fstab.extra
-    # entries: proc, linprocfs, tmpfs /tmp, linsysfs, fdescfs). Prepend the
-    # per-install root and EFI entries so those baked-in mounts survive.
+    # The copied root already carries the live session's /etc/fstab (the
+    # fstab.extra entries: proc, linprocfs, tmpfs /tmp, linsysfs, fdescfs).
+    # Prepend the per-install root and EFI entries so those mounts survive.
     {
         echo "$ROOT_PART   /      ufs   rw   1 1"
         if [ "$BOOT_METHOD" = "UEFI" ]; then
