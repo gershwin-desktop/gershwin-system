@@ -398,6 +398,18 @@ if [ "$IMAGE_MODE" = "0" ]; then
     PRUNE="$PRUNE -path /var/run -prune -o -path /var/tmp -prune -o -path /var/cache -prune -o"
     PRUNE="$PRUNE -path /etc/rc.conf.local -prune -o"
 
+    # The devd-suppression workaround at the top of this script mounts an
+    # empty tmpfs over /usr/local/sbin. Unmount it before the copy so the
+    # real package binaries there (cupsd, avahi-daemon, blkid, automount,
+    # ...) are captured -- otherwise find walks the empty tmpfs and the
+    # installed system is missing all of /usr/local/sbin. Partitioning is
+    # done and the target is already mounted, so devd is no longer a
+    # concern; clearing MOUNTED_TMPFS keeps the EXIT trap from retrying.
+    if [ "$MOUNTED_TMPFS" = "1" ]; then
+        umount /usr/local/sbin 2>/dev/null || true
+        MOUNTED_TMPFS=0
+    fi
+
     report_progress "Copying" 30 "Copying live system to $MNT..."
     echo "Copying live system to $MNT (find | cpio) ..."
     # cpio exits non-zero when it skips entries (the unionfs symlink bug),
