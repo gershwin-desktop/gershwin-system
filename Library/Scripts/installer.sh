@@ -434,7 +434,7 @@ if [ "$IMAGE_MODE" = "0" ]; then
         rm -rf "$MNT/Local"
     fi
     echo "Running dscli init in chroot..."
-    chroot "$MNT" /System/Library/Tools/dscli init || true
+    chroot "$MNT" /bin/sh -c '. /System/Library/Makefiles/GNUstep.sh && /System/Library/Tools/dscli init' || true
 fi
 
 # Install bootloader
