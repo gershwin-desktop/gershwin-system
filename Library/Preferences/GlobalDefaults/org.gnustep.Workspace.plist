@@ -39,6 +39,7 @@
         <string>/net</string>
         <string>/nvidia</string>
         <string>/opt</string>
+        <string>/private</string>
         <string>/proc</string>
         <string>/rescue</string>
         <string>/root</string>
