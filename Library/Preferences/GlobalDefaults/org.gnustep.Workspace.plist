@@ -29,6 +29,7 @@
         <string>/gnustep-src</string>
         <string>/home</string>
         <string>/initrd.img</string>
+        <string>/initrd.img.old</string>
         <string>/lib</string>
         <string>/lib32</string>
         <string>/lib64</string>
@@ -53,6 +54,7 @@
         <string>/var</string>
         <string>/version</string>
         <string>/vmlinuz</string>
+        <string>/vmlinuz.old</string>
         <string>/zroot</string>
     </array>
     <key>GSWorkspaceApplication</key>
