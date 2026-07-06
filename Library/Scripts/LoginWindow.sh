@@ -33,19 +33,18 @@ sysctl dev.vgapci 2>/dev/null | grep 0x8086 && kldload /boot/modules/i915kms.ko
 sysctl dev.vgapci 2>/dev/null | grep 0x1022 && kldload /boot/modules/amdgpu.ko
 sysctl dev.vgapci 2>/dev/null | grep 0x10de && kldload /boot/modulesn/nvidia.ko
 
-# GPU / DRM readiness before starting X.
-#
-# On NextBSD the GPU KMS driver is loaded automatically by IOKit during device
-# enumeration, so we must NOT kldload it ourselves. That attach is asynchronous,
-# though, so wait for the DRM device node to appear before starting X — otherwise
-# X races the attach, falls back to scfb on the EFI framebuffer, and the DRM
-# aperture takeover then blanks the screen (black login + input that works but
-# draws into a dead framebuffer).
 if [ "$(uname -s)" = "NextBSD" ]; then
-    for i in $(seq 1 100); do
-        ls /dev/dri/card* >/dev/null 2>&1 && break
-        sleep 0.1
-    done            # ~10s cap, then start X regardless
+    # Only a real DRM-capable GPU (Intel/AMD/NVIDIA) gets a KMS device node, which
+    # IOKit brings up asynchronously — so wait for it before starting X, else X
+    # races the attach, falls back to scfb on the EFI framebuffer, and the DRM
+    # aperture takeover blanks the screen. VMs (VMware/VirtualBox scfb, vendor
+    # 0x15ad) never get a node, so don't stall boot waiting on one.
+    if sysctl dev.vgapci 2>/dev/null | grep -qE 'vendor=0x(8086|1002|10de)'; then
+        for i in $(seq 1 100); do
+            ls /dev/dri/card* >/dev/null 2>&1 && break
+            sleep 0.1
+        done            # ~10s cap, then start X regardless
+    fi
 fi
 
 exec LoginWindow
