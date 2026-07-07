@@ -469,8 +469,16 @@ sync
 report_progress "Finalizing" 98 "Unmounting target..."
 for dir in dev proc sys run; do
     umount -f "$MNT/$dir"
+    mkdir -p "$MNT/$dir"
 done
 umount_recursive
+
+# Restart automounter
+# Devuan
+if [ -e /etc/init.d/eudev ] ; then
+  service eudev start
+fi
+# TODO: Implement this for other systems
 
 report_progress "Complete" 100 "Installation complete."
 echo "=== COMPLETE ==="
