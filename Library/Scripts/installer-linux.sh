@@ -141,7 +141,7 @@ else
             echo "Image-based install: copying from $ISO_MP"
             SRC="$ISO_MP"
         else
-            printf "Found ISO9660 installation media. Use it as source? [Y/n]: "
+            printf "Perform image-based installation (like Live system)? [Y/n]: "
             read -r image_ans
             case "$image_ans" in
                 [Nn]*) SRC="/" ;;
@@ -388,8 +388,8 @@ else
 fi
 
 # Re-create excluded mount point directories
-for d in dev proc sys run tmp mnt media; do
-    mkdir -p "$MNT/$d"
+for e in "${EXCLUDES[@]}"; do
+    mkdir -p "$MNT/$e"
 done
 chmod 1777 "$MNT/tmp"
 
