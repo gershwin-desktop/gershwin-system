@@ -249,7 +249,7 @@ mkdir -p "$MNT"
 
 # Prevent automounter from mounting newly formatted disks
 # Devuan
-if [ -f /etc/init.d/eudev ] ; then
+if [ -e /etc/init.d/eudev ] ; then
   service eudev stop
 fi
 # TODO: Implement this for other systems
