@@ -247,6 +247,13 @@ set -x
 umount_recursive
 mkdir -p "$MNT"
 
+# Prevent automounter from mounting newly formatted disks
+# Devuan
+if [ -f /etc/init.d/eudev ] ; then
+  service eudev stop
+fi
+# TODO: Implement this for other systems
+
 # Partitioning
 report_progress "Partitioning" 8 "Wiping old partition table..."
 echo "Creating new partition table on $DISK..."
@@ -397,6 +404,7 @@ chmod 1777 "$MNT/tmp"
 report_progress "Bootloader" 82 "Preparing chroot environment..."
 echo "Preparing chroot environment..."
 for dir in dev proc sys run; do
+    mkdir -p "$MNT/$dir"
     mount --bind /$dir "$MNT/$dir"
 done
 
@@ -459,6 +467,9 @@ echo "Finalizing installation..."
 sync
 
 report_progress "Finalizing" 98 "Unmounting target..."
+for dir in dev proc sys run; do
+    umount -f "$MNT/$dir"
+done
 umount_recursive
 
 report_progress "Complete" 100 "Installation complete."
