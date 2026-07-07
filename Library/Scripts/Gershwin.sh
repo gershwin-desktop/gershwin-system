@@ -1,17 +1,11 @@
 #!/bin/sh
 
-# Redirect stdout and stderr to a fifo on Linux,
-# making them accessible from a graphical session,
-# without depending on nor failing in the presence of systemd
-# if [ "$(uname -s)" = "Linux" ]; then
-#     BOOTLOG_DIR=/tmp
-#     BOOTLOG_FIFO=/tmp/Gershwin.log.fifo
-# 
-#     [ -d "$BOOTLOG_DIR" ] || mkdir -p "$BOOTLOG_DIR"
-#     [ -p "$BOOTLOG_FIFO" ] || { rm -f "$BOOTLOG_FIFO"; mkfifo "$BOOTLOG_FIFO"; }
-# 
-#     exec >"$BOOTLOG_FIFO" 2>&1
-# fi
+# If $SHELL is /bin/sh or unset, then set bash if possible
+[ "${SHELL:-/bin/sh}" != /bin/sh ] || {
+  for b in /usr/local/bin/bash /usr/bin/bash /bin/bash /bin/sh; do
+    [ -x "$b" ] && { export SHELL="$b"; break; }
+  done
+}
 
 . /System/Library/Makefiles/GNUstep.sh
 
