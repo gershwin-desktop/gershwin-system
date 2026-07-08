@@ -1,0 +1,42 @@
+#!/bin/sh
+
+find /Developer/Library/Sources -type d -name .git -prune 2>/dev/null | while IFS= read -r gitdir; do
+	repo="${gitdir%/.git}"
+	case "${repo##*/}" in libs-* | swift-*) continue ;; esac
+	cd "$repo" || continue
+
+	unpushed=false
+
+	git rev-parse --symbolic-full-name @{u} >/dev/null 2>&1 && \
+		[ "$(git rev-list --count @{u}..HEAD 2>/dev/null)" -gt 0 ] && unpushed=true
+
+	files="$(git diff --name-only 2>/dev/null; git diff --cached --name-only 2>/dev/null; git ls-files --others --exclude-standard 2>/dev/null)"
+	files="$(printf '%s\n' "$files" | sort -u | sed '/^$/d')"
+	set -- $files
+	count=$#
+
+	if [ "$count" -gt 0 ] || $unpushed; then
+		printf '%s\n' "${repo##*/}"
+		echo . >/tmp/commitcheck.dirty
+	fi
+
+	if $unpushed; then
+		echo "  unpushed commits"
+	fi
+
+	if [ "$count" -gt 0 ]; then
+		if [ "$count" -le 50 ]; then
+			printf '  %s\n' $files
+		else
+			echo "  $count dirty files"
+		fi
+	fi
+done
+
+if [ ! -f /tmp/commitcheck.dirty ]; then
+	echo "All clean"
+	rm -f /tmp/commitcheck.dirty
+	exit 0
+fi
+rm -f /tmp/commitcheck.dirty
+exit 1
