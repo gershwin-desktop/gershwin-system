@@ -35,5 +35,7 @@
     <string>Inter-Medium</string>
     <key>NSFontSize</key>
     <string>13.0</string>
+    <key>GSFilenameExtensionDisplayMode</key>
+    <string>2</string>
 </dict>
 </plist>
