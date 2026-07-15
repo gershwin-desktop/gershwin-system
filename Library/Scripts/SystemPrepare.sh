@@ -575,7 +575,7 @@ install_packages() {
 
     pkg install -y nano \
         drm-kmod ${X11_PKGS} setxkbmap \
-        xkill xwininfo xdotool \
+        xkill xwininfo xdotool xprop \
         automount sshpass ${WLAN_FW_PKGS} ${BT_FW_PKGS} \
         ntp \
         fusefs-exfat fusefs-ext2 fusefs-hfsfuse fusefs-lkl fusefs-ntfs fusefs-squashfuse || \
@@ -852,4 +852,3 @@ main() {
 
 # Run the main function
 main
-
