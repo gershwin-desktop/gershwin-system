@@ -238,8 +238,13 @@ enable_display_manager_debian() {
 change_elogind_conf() {
     # Check if /etc/elogind/logind.conf exists
     if [ -f /etc/elogind/logind.conf ]; then
-        # Disable handling of power button presses, let Workspace handle it
-        sed -i' ' 's/^HandlePowerKey=.*/HandlePowerKey=ignore # Workspace handles this key/' /etc/elogind/logind.conf
+        # Disable handling of power button presses, let the Menu handle it.
+        # The directive is commented out by default (e.g.
+        # "#HandlePowerKey=poweroff"), so match the commented form too.
+        # NOTE: no inline comment after the value - elogind's config parser
+        # rejects it, silently falling back to the "poweroff" default.
+        sed -i' ' -e 's/^#\?HandlePowerKey=.*/HandlePowerKey=ignore/' \
+            /etc/elogind/logind.conf
     fi
 }
 
