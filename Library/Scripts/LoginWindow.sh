@@ -42,8 +42,8 @@ if [ "$(uname -s)" = "NextBSD" ]; then
     if sysctl dev.vgapci 2>/dev/null | grep -qE 'vendor=0x(8086|1002|10de)'; then
         for i in $(seq 1 100); do
             ls /dev/dri/card* >/dev/null 2>&1 && break
-            sleep 1
-        done            # ~10s cap, then start X regardless
+            sleep 2
+        done            # ~200s cap, then start X regardless
     fi
 fi
 
