@@ -42,8 +42,18 @@ if [ "$(uname -s)" = "NextBSD" ]; then
     if sysctl dev.vgapci 2>/dev/null | grep -qE 'vendor=0x(8086|1002|10de)'; then
         for i in $(seq 1 100); do
             ls /dev/dri/card* >/dev/null 2>&1 && break
-            sleep 2
-        done            # ~200s cap, then start X regardless
+            sleep 0.1
+        done            # ~10s cap, then start X regardless
+    fi
+
+    # NVIDIA only: card0 existing is not the same as "safe to start X". Starting
+    # X the instant the node appears either panics the kernel in the nvidia-drm
+    # GEM mmap fault path, or brings up a session with no keyboard/mouse — X
+    # enumerates input exactly once at startup and XLibre has no hotplug backend
+    # on FreeBSD, so anything still enumerating is lost for the session. A short
+    # settle delay works around both. See nextbsd#390 / nextbsd#391.
+    if sysctl dev.vgapci 2>/dev/null | grep -q 'vendor=0x10de'; then
+        sleep 2
     fi
 fi
 
