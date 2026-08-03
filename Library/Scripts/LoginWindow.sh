@@ -33,6 +33,18 @@ sysctl dev.vgapci 2>/dev/null | grep 0x8086 && kldload /boot/modules/i915kms.ko
 sysctl dev.vgapci 2>/dev/null | grep 0x1022 && kldload /boot/modules/amdgpu.ko
 sysctl dev.vgapci 2>/dev/null | grep 0x10de && kldload /boot/modulesn/nvidia.ko
 
+# Hand the boot splash over to the graphical session on the same virtual
+# terminal.  LoginWindow starts Xorg on the plymouth VT (tty1, from
+# console=tty1); the boot splash is shown there too.  Tell plymouth to quit
+# while keeping the last splash frame on screen (--retain-splash): plymouth
+# stops drawing but leaves the picture and yields the console/DRM master, so
+# Xorg draws over it - no flash of text.  On systems without plymouth these
+# calls are no-ops and LoginWindow behaves exactly as before.
+if command -v plymouth >/dev/null 2>&1; then
+    plymouth quit --retain-splash 2>/dev/null || true
+    chvt 1 2>/dev/null || true
+fi
+
 if [ "$(uname -s)" = "NextBSD" ]; then
     # Only a real DRM-capable GPU (Intel/AMD/NVIDIA) gets a KMS device node, which
     # IOKit brings up asynchronously — so wait for it before starting X, else X
