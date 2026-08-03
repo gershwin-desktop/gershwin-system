@@ -587,6 +587,17 @@ install_packages() {
         log "Warning: one or more pkg installs failed"
 }
 
+install_plymouth_splash() {
+    SCRIPT_DIR="$(dirname "$0")"
+    PLYMOUTH_SCRIPT="$SCRIPT_DIR/install-plymouth.sh"
+    if [ ! -x "$PLYMOUTH_SCRIPT" ]; then
+        log "Warning: $PLYMOUTH_SCRIPT not found or not executable; skipping plymouth splash setup"
+        return
+    fi
+    log "Running $PLYMOUTH_SCRIPT (enables plymouth boot splash on supported distributions)"
+    "$PLYMOUTH_SCRIPT" || log "Warning: $PLYMOUTH_SCRIPT exited with an error"
+}
+
 # Load kernel module for Intel GPUs in late boot; required for proper acceleration
 configure_kld_list() {
     log "Ensuring i915kms and fusefs are in kld_list"
@@ -817,6 +828,10 @@ main() {
 
     configure_pkg_repo
     install_packages
+
+    # Boot splash (plymouth) - safe on all platforms: install-plymouth.sh
+    # exits 0 on unsupported distributions.
+    install_plymouth_splash
 
     # Enable Directory Services and LoginWindow on all platforms
     enable_dshelper
