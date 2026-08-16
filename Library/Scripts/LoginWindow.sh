@@ -34,12 +34,23 @@ sysctl dev.vgapci 2>/dev/null | grep 0x1022 && kldload /boot/modules/amdgpu.ko
 sysctl dev.vgapci 2>/dev/null | grep 0x10de && kldload /boot/modulesn/nvidia.ko
 
 if [ "$(uname -s)" = "NextBSD" ]; then
-    # Only a real DRM-capable GPU (Intel/AMD/NVIDIA) gets a KMS device node, which
-    # IOKit brings up asynchronously — so wait for it before starting X, else X
-    # races the attach, falls back to scfb on the EFI framebuffer, and the DRM
-    # aperture takeover blanks the screen. VMs (VMware/VirtualBox scfb, vendor
-    # 0x15ad) never get a node, so don't stall boot waiting on one.
-    if sysctl dev.vgapci 2>/dev/null | grep -qE 'vendor=0x(8086|1002|10de)'; then
+    # Any GPU we ship a DRM kext for gets a KMS device node, which IOKit brings
+    # up asynchronously — so wait for it before starting X, else X races the
+    # attach, falls back to scfb on the EFI framebuffer, and the DRM aperture
+    # takeover blanks the screen for the rest of the session.
+    #
+    #   8086 Intel      1002 AMD/ATI     10de NVIDIA
+    #   1234 Bochs      — qemu's default -vga std / bochs-display
+    #   80ee VirtualBox — vboxvideo
+    #
+    # The virtual-GPU ids matter as much as the real ones now: BochsGraphics.kext
+    # and VBoxGraphics.kext both bind and both take the aperture. qemu with
+    # -vga std IS 1234:1111, so a plain VM hits this race on every boot — it is
+    # what blanked the nextbsd screenshot gate.
+    #
+    # NOT listed: 15ad (VMware). No vmwgfx kext ships, so that node never
+    # appears and waiting on it would stall boot for the full timeout.
+    if sysctl dev.vgapci 2>/dev/null | grep -qE 'vendor=0x(8086|1002|10de|1234|80ee)'; then
         for i in $(seq 1 100); do
             ls /dev/dri/card* >/dev/null 2>&1 && break
             sleep 0.1
