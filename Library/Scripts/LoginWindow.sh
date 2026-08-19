@@ -62,22 +62,7 @@ if [ "$(uname -s)" = "NextBSD" ]; then
     #
     # NOT listed: 15ad (VMware). No vmwgfx kext ships, so that node never
     # appears and waiting on it would stall boot for the full timeout.
-    #
-    # virtio-gpu (1af4:1050) cannot be a vendor id in the list above, because it
-    # is not a vgapci device at all -- on an arm64 guest `sysctl dev.vgapci`
-    # returns "unknown oid" and this whole branch never fires. It hangs off
-    # virtio_pci, so it needs its own test, and that test cannot key off the
-    # driver name either: the device is `vtgpu` (base virtio_gpu(4), which owns
-    # the console from early boot) until VirtIOGraphics.kext takes it over, and
-    # `virtio_gpu_drm` afterwards. dev.virtio_pci.N.%desc is stable across both
-    # -- it describes the transport, not whoever won the child -- and is present
-    # long before either driver settles, which is exactly when this gate runs.
-    #
-    # The race is real here and arrives late: the kext is loaded by kextd, which
-    # then hands the device over atomically, so card0 can appear well after
-    # LoginWindow starts.
-    if sysctl dev.vgapci 2>/dev/null | grep -qE 'vendor=0x(8086|1002|10de|1234|80ee)' ||
-       sysctl dev.virtio_pci 2>/dev/null | grep -q 'GPU adapter'; then
+    if sysctl dev.vgapci 2>/dev/null | grep -qE 'vendor=0x(8086|1002|10de|1234|80ee)'; then
         for i in $(seq 1 100); do
             ls /dev/dri/card* >/dev/null 2>&1 && break
             sleep 0.1
