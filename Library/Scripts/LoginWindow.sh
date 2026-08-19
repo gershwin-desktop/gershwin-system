@@ -62,11 +62,46 @@ if [ "$(uname -s)" = "NextBSD" ]; then
     #
     # NOT listed: 15ad (VMware). No vmwgfx kext ships, so that node never
     # appears and waiting on it would stall boot for the full timeout.
-    if sysctl dev.vgapci 2>/dev/null | grep -qE 'vendor=0x(8086|1002|10de|1234|80ee)'; then
+    if sysctl dev.vgapci 2>/dev/null | grep -qE 'vendor=0x(8086|1002|10de|1234|80ee)' ||
+       sysctl dev.virtio_pci 2>/dev/null | grep -q 'GPU adapter'; then
         for i in $(seq 1 100); do
             ls /dev/dri/card* >/dev/null 2>&1 && break
             sleep 0.1
         done            # ~10s cap, then start X regardless
+    fi
+
+    # virtio-gpu (1af4:1050) is not a vgapci device -- on arm64 `sysctl
+    # dev.vgapci` is an unknown oid entirely -- so it hangs off virtio_pci and
+    # needs the test above. It also cannot key off the driver name: the device
+    # is `vtgpu` (base virtio_gpu(4), the console) until VirtIOGraphics.kext
+    # takes it over, and `virtio_gpu_drm` after. dev.virtio_pci.N.%desc names
+    # the transport, so it is stable across both and present from early boot.
+    #
+    # But waiting for card0 is NOT sufficient here, it is actively harmful on
+    # its own: on virtio-gpu card0 appears BEFORE USB HID attaches. Measured
+    # boot order on an arm64 guest:
+    #
+    #   virtio_gpu_drm0: <VirtIO GPU (DRM/KMS)>   <- card0 exists
+    #   VT: Replacing driver ... with new "drmfb"
+    #   hms0: <QEMU QEMU USB Tablet>              <- input, later
+    #   hms1: <QEMU QEMU USB Mouse>
+    #   hkbd0: <QEMU QEMU USB Keyboard>
+    #
+    # so releasing X the instant card0 appears hands it a machine with no
+    # keyboard yet. X enumerates input exactly once at startup and XLibre has
+    # no hotplug backend on FreeBSD, so that keyboard is lost for the whole
+    # session (nextbsd#390/#391) -- observed as X adding 5 input devices with
+    # the USB keyboard absent. Wait for a keyboard AND a pointer to attach,
+    # then settle, the same shape as the NVIDIA delay below.
+    if sysctl dev.virtio_pci 2>/dev/null | grep -q 'GPU adapter'; then
+        for i in $(seq 1 150); do
+            if devinfo 2>/dev/null | grep -qE '(hkbd|ukbd|atkbd)[0-9]' &&
+               devinfo 2>/dev/null | grep -qE '(hms|ums)[0-9]'; then
+                break
+            fi
+            sleep 0.1
+        done            # ~15s cap, then start X regardless
+        sleep 2         # let the rest of the HID tree settle, as NVIDIA does
     fi
 
     # NVIDIA only: card0 existing is not the same as "safe to start X". Starting
