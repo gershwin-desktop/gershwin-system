@@ -104,6 +104,53 @@ if [ "$(uname -s)" = "NextBSD" ]; then
         sleep 2         # let the rest of the HID tree settle, as NVIDIA does
     fi
 
+    # Raspberry Pi 5 / BCM2712. NEITHER branch above fires here, so until now
+    # this machine got no wait at all: the display is an FDT device on
+    # simplebus, not PCI, so `sysctl dev.vgapci` is an unknown oid entirely,
+    # and there is no virtio GPU either.
+    #
+    # It needs the wait more than any of them, because vc4 does not come from
+    # the kernel at boot -- it is a kext that kextd autoloads from USERLAND,
+    # which lands very late. Measured on a Pi 500+, by dmesg line:
+    #
+    #   623  hms0:  <PixArt USB Optical Mouse>
+    #   629  hkbd0: <Pi 500+ Keyboard>
+    #   759  vc40:  <Broadcom VideoCore VI (KMS)>
+    #   793  VT: Replacing driver "fb" with new "drmfb"
+    #
+    # Note that ordering is the OPPOSITE of virtio-gpu above: input attaches
+    # ~130 lines BEFORE the display. So this branch deliberately waits only for
+    # the device node -- by the time it exists the HID tree has long since
+    # settled, and the keyboard-and-pointer wait virtio needs would be dead
+    # code here.
+    #
+    # Detected by the FDT `model`, not a compatible string, and that is not a
+    # style choice: ofwdump prints a MULTI-string property as hex with no ASCII
+    # line, and the root `compatible` is multi-string. Grepping the tree for
+    # "vc6" matches nothing at all. `model` is a single string and prints
+    # readable.
+    #
+    # Gated on the kext being installed for the same reason VMware is left out
+    # above: if nothing will ever create the node, waiting on it only stalls
+    # boot for the full timeout.
+    if [ -d /System/Library/Extensions/VideoCore6KMS.kext ] &&
+       ofwdump -P model / 2>/dev/null | grep -q 'Raspberry Pi'; then
+        __lw_t0=$(date +%s)
+        for i in $(seq 1 300); do
+            # card0 alone is NOT the display. v3d -- the GPU, a separate device
+            # on 2712 -- also registers a DRM device, and DRM minors are handed
+            # out in attach order, so card0 is whichever of the two won the
+            # race. Require the vc4 device itself, so this cannot be satisfied
+            # by the render node.
+            if [ -e /dev/dri/card0 ] &&
+               devinfo 2>/dev/null | grep -qE '(^| )vc40( |$)'; then
+                break
+            fi
+            sleep 0.1
+        done            # ~30s cap, then start X regardless
+        logger -t LoginWindow "rpi: waited $(($(date +%s) - __lw_t0))s for vc4 card0 (present=$([ -e /dev/dri/card0 ] && echo yes || echo NO))"
+    fi
+
     # NVIDIA only: card0 existing is not the same as "safe to start X". Starting
     # X the instant the node appears either panics the kernel in the nvidia-drm
     # GEM mmap fault path, or brings up a session with no keyboard/mouse — X
