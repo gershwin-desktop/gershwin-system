@@ -24,22 +24,14 @@ export XDG_CURRENT_DESKTOP="Gershwin"
 # Cannot run it like this here because e.g., on stock FreeBSD there is no sudo
 # sudo usermod -aG lpadmin $USER
 
-# Launch window manager if it is available.
-if which WindowManager >/dev/null 2>&1; then
-  (WindowManager &)
-fi
-
 # Launch devmon automounter if it is available (udevil package on Devuan).
 if which devmon >/dev/null 2>&1; then
   (devmon &)
 fi
 
-sleep 2 && # FIXME: Wait for WindowManager to start properly before launching Menu
-
-# Launch Menu and a D-Bus session if none is already there.
-# Only do this if Menu is on the $PATH; otherwise we don't require D-Bus.
-# NOTE: On some systems, a D-Bus session may already have been started by other parts
-# of the distribution by the time this script is running.
+# D-Bus is required by Menu; only set up a session bus if none is there and
+# Menu is on the $PATH.  gershwin-session inherits this environment for all
+# supervised apps.
 if which Menu >/dev/null 2>&1; then
   if [ -z "$DBUS_SESSION_BUS_ADDRESS" ] ; then
     export $(dbus-launch)
@@ -47,13 +39,15 @@ if which Menu >/dev/null 2>&1; then
   # Make GTK applications use Menu; this requires e.g., on Debian:
   # sudo apt-get -y install appmenu-gtk2-module appmenu-gtk3-module
   export GTK_MODULES=appmenu-gtk-module
-  Menu &
 fi
 
 if [ -e /System/Library/Tools/SudoAskPass ] ; then
   export SUDO_ASKPASS=/System/Library/Tools/SudoAskPass
 fi
 
-sleep 2 # FIXME: Wait for Menu to start properly before launching Workspace
-
-exec Workspace
+# Supervise the desktop apps: gershwin-session (the session supervisor)
+# restarts any of them that exits and shuts them all down when this session
+# ends. The app names are passed as arguments so the desktop composition
+# stays configurable per flavor. For development, send SIGUSR1/SIGUSR2 to
+# the gershwin-session process to disable or re-enable the auto restart.
+exec gershwin-session Workspace Menu WindowManager

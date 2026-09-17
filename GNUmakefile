@@ -1,3 +1,4 @@
+GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 # GNUmakefile for gershwin-system
 # Installs the contents of the repository `Library` directory into /System/Library
 # (or $(DESTDIR)/System/Library when DESTDIR is set).
@@ -37,3 +38,4 @@ uninstall:
 
 clean:
 	@echo "Nothing to clean."
+
