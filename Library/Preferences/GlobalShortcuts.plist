@@ -3,6 +3,10 @@
 <plist version="1.0">
   <dict>
     <key>cmd+shift+3</key>
+    <string>Screenshot -s</string>
+    <key>cmd+shift+4</key>
+    <string>Screenshot -a</string>
+    <key>cmd+shift+5</key>
     <string>Screenshot</string>
   </dict>
 </plist>
