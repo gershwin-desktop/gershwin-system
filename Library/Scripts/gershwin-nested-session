@@ -1,0 +1,502 @@
+#!/bin/sh
+#
+# Copyright (c) 2026 Simon Peter
+#
+# SPDX-License-Identifier: BSD-2-Clause
+#
+# gershwin-nested-session - run a complete Gershwin desktop inside a window on
+# the desktop you are sitting at.
+#
+# The nested session runs as its own user on its own X display (Xephyr), so it
+# can neither see nor disturb the windows, defaults and running applications of
+# the user watching it.  Several nested sessions may run side by side: each one
+# claims a free slot N, which is display ":N", user "uitest<N>" and the state
+# directory /tmp/gershwin-nested/N.
+#
+# Usage:
+#   gershwin-nested-session [-s WxH] [-n SLOT] [-u USER] [-d]
+#   gershwin-nested-session -k SLOT|all
+#   gershwin-nested-session -l
+#
+# Without -d the script owns the session and stays in the foreground: closing
+# the window, Ctrl-C, SIGTERM and SIGHUP all tear it down completely.
+
+set -u
+
+PROGRAM=${0##*/}
+
+STATE_ROOT=${GERSHWIN_NESTED_STATE:-/tmp/gershwin-nested}
+USER_PREFIX=${GERSHWIN_NESTED_USER_PREFIX:-uitest}
+MIN_SLOT=${GERSHWIN_NESTED_MIN_SLOT:-80}
+# Slot 99 belongs to the uitest suite (plain user "uitest"), which must never
+# be taken over by a nested session, so the search starts below it.
+MAX_SLOT=${GERSHWIN_NESTED_MAX_SLOT:-98}
+
+SCREEN=1280x800
+SLOT=
+SLOT_USER=
+SLOT_DIR=
+DETACH=
+KEEP=
+CLEANED=
+XEPHYR_PID=
+
+MENU=/System/Library/CoreServices/Applications/Menu.app/Menu
+WINDOWMANAGER=/System/Library/CoreServices/Applications/WindowManager.app/WindowManager
+WORKSPACE=/System/Applications/Workspace.app/Workspace
+GNUSTEP_SH=/System/Library/Makefiles/GNUstep.sh
+DRIVEUI_BUNDLE=/System/Library/Bundles/DriveUI.bundle
+
+msg() { printf '%s: %s\n' "$PROGRAM" "$*"; }
+warn() { printf '%s: %s\n' "$PROGRAM" "$*" >&2; }
+die() { warn "$*"; exit 1; }
+
+usage()
+{
+  cat <<USAGE_EOF
+usage: $PROGRAM [-s WxH] [-n SLOT] [-u USER] [-d]
+       $PROGRAM -k SLOT|all
+       $PROGRAM -l
+
+  -s, --size WxH     size of the session window (default $SCREEN)
+  -n, --slot N       use slot N ($MIN_SLOT..$MAX_SLOT) instead of the first free one
+  -u, --user NAME    run the session as NAME instead of $USER_PREFIX<slot>
+  -d, --detach       start the session and return, leaving it running
+  -k, --stop N|all   tear down a detached session (or all of them)
+  -l, --list         list the nested sessions started by this script
+  -h, --help         this text
+USAGE_EOF
+}
+
+# Root is needed to create the session user and to run the desktop as that
+# user; the window itself belongs to the user watching it, so Xephyr is
+# started as the invoking user and no X credentials have to be handed around.
+run_root()
+{
+  if [ "$(id -u)" = 0 ]; then
+    "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo "$@"
+  else
+    warn "need root or sudo to run: $*"
+    return 1
+  fi
+}
+
+as_user()
+{
+  _au_user=$1
+  shift
+  if [ "$(id -un)" = "$_au_user" ]; then
+    "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo -u "$_au_user" "$@"
+  elif [ "$(id -u)" = 0 ]; then
+    _au_cmd=
+    for _au_arg in "$@"; do
+      _au_cmd="$_au_cmd '$(printf '%s' "$_au_arg" | sed "s/'/'\\\\''/g")'"
+    done
+    su -m "$_au_user" -c "$_au_cmd"
+  else
+    warn "need root or sudo to run as $_au_user"
+    return 1
+  fi
+}
+
+user_home()
+{
+  _uh_home=$(getent passwd "$1" 2>/dev/null | cut -d: -f6)
+  if [ -z "$_uh_home" ]; then
+    _uh_home=$(awk -F: -v u="$1" '$1 == u { print $6 }' /etc/passwd 2>/dev/null)
+  fi
+  printf '%s' "$_uh_home"
+}
+
+ensure_user()
+{
+  id "$1" >/dev/null 2>&1 && return 0
+  msg "creating session user $1"
+  case $(uname -s) in
+    FreeBSD|NextBSD|DragonFly)
+      run_root pw useradd "$1" -m -s /bin/sh || return 1
+      ;;
+    Linux|OpenBSD|NetBSD)
+      run_root useradd -m -s /bin/sh "$1" || return 1
+      ;;
+    *)
+      warn "don't know how to create a user on $(uname -s)"
+      return 1
+      ;;
+  esac
+  id "$1" >/dev/null 2>&1
+}
+
+display_up() { xdpyinfo -display ":$1" >/dev/null 2>&1; }
+
+user_running() { id "$1" >/dev/null 2>&1 && pgrep -u "$1" >/dev/null 2>&1; }
+
+# A slot is taken as soon as anything of it exists - our own state directory,
+# an X display, a leftover lock file or processes of its user.  Checking all
+# of them keeps a nested session away from the uitest suite and from sessions
+# that other people or other tools started.
+slot_busy()
+{
+  _sb_slot=$1
+  [ -d "$STATE_ROOT/$_sb_slot" ] && return 0
+  [ -e "/tmp/.X11-unix/X$_sb_slot" ] && return 0
+  [ -e "/tmp/.X$_sb_slot-lock" ] && return 0
+  display_up "$_sb_slot" && return 0
+  user_running "$USER_PREFIX$_sb_slot" && return 0
+  return 1
+}
+
+session_alive()
+{
+  _sa_slot=$1
+  display_up "$_sa_slot" && return 0
+  _sa_user=$(cat "$STATE_ROOT/$_sa_slot/user" 2>/dev/null)
+  [ -n "$_sa_user" ] && user_running "$_sa_user" && return 0
+  return 1
+}
+
+# A session whose X server and processes are gone left its state directory
+# behind (machine crash, SIGKILL); drop it so the slot becomes usable again.
+reap_stale()
+{
+  [ -d "$STATE_ROOT" ] || return 0
+  for _rs_dir in "$STATE_ROOT"/*; do
+    [ -d "$_rs_dir" ] || continue
+    _rs_slot=${_rs_dir##*/}
+    case $_rs_slot in
+      ''|*[!0-9]*) continue ;;
+    esac
+    session_alive "$_rs_slot" && continue
+    msg "reclaiming stale slot $_rs_slot"
+    stop_slot "$_rs_slot" quiet
+  done
+}
+
+claim_slot()
+{
+  _cs_slot=$MAX_SLOT
+  while [ "$_cs_slot" -ge "$MIN_SLOT" ]; do
+    if ! slot_busy "$_cs_slot" && mkdir "$STATE_ROOT/$_cs_slot" 2>/dev/null; then
+      SLOT=$_cs_slot
+      return 0
+    fi
+    _cs_slot=$((_cs_slot - 1))
+  done
+  return 1
+}
+
+stop_slot()
+{
+  _ss_slot=$1
+  _ss_quiet=${2:-}
+  _ss_dir=$STATE_ROOT/$_ss_slot
+  _ss_user=$(cat "$_ss_dir/user" 2>/dev/null)
+  [ -n "$_ss_user" ] || _ss_user=$USER_PREFIX$_ss_slot
+
+  # Only ever kill by user, and never one that could be a real login: the
+  # session user is the single thing this script is allowed to clear out.
+  _ss_uid=$(id -u "$_ss_user" 2>/dev/null || true)
+  if [ -n "$_ss_uid" ] && [ "$_ss_uid" != 0 ]; then
+    run_root pkill -TERM -u "$_ss_user" >/dev/null 2>&1 || true
+    _ss_i=0
+    while [ "$_ss_i" -lt 5 ] && pgrep -u "$_ss_user" >/dev/null 2>&1; do
+      sleep 1
+      _ss_i=$((_ss_i + 1))
+    done
+    run_root pkill -KILL -u "$_ss_user" >/dev/null 2>&1 || true
+    # A killed session leaves the name server state of its user behind, and a
+    # fresh gdnc then cannot lock the port names ("Failed to lock names for
+    # NSMessagePortNameServer").  Only that user's state is removed.
+    run_root rm -rf "/tmp/GNUstepSecure$_ss_uid" >/dev/null 2>&1 || true
+  fi
+
+  _ss_pid=$(cat "$_ss_dir/xephyr.pid" 2>/dev/null || true)
+  if [ -n "$_ss_pid" ]; then
+    kill -TERM "$_ss_pid" 2>/dev/null || run_root kill -TERM "$_ss_pid" 2>/dev/null || true
+    _ss_i=0
+    while [ "$_ss_i" -lt 5 ] && kill -0 "$_ss_pid" 2>/dev/null; do
+      sleep 1
+      _ss_i=$((_ss_i + 1))
+    done
+    kill -KILL "$_ss_pid" 2>/dev/null || run_root kill -KILL "$_ss_pid" 2>/dev/null || true
+  fi
+
+  # Xephyr removes its lock and socket when it exits normally; after a kill -9
+  # they can stay behind and would make the slot look busy forever.
+  if ! display_up "$_ss_slot"; then
+    run_root rm -f "/tmp/.X$_ss_slot-lock" "/tmp/.X11-unix/X$_ss_slot" >/dev/null 2>&1 || true
+  fi
+
+  rm -rf "$_ss_dir" 2>/dev/null || run_root rm -rf "$_ss_dir" >/dev/null 2>&1 || true
+  [ -n "$_ss_quiet" ] || msg "slot $_ss_slot stopped"
+}
+
+cleanup()
+{
+  [ -n "$CLEANED" ] && return 0
+  CLEANED=1
+  trap - INT TERM HUP EXIT
+  [ -n "$KEEP" ] && return 0
+  [ -n "$SLOT" ] || return 0
+  msg "tearing down slot $SLOT"
+  stop_slot "$SLOT" quiet
+}
+
+list_sessions()
+{
+  [ -d "$STATE_ROOT" ] || { msg "no nested sessions"; return 0; }
+  _ls_found=
+  for _ls_dir in "$STATE_ROOT"/*; do
+    [ -d "$_ls_dir" ] || continue
+    _ls_slot=${_ls_dir##*/}
+    case $_ls_slot in
+      ''|*[!0-9]*) continue ;;
+    esac
+    _ls_found=1
+    if session_alive "$_ls_slot"; then _ls_state=running; else _ls_state=stale; fi
+    printf 'slot %s  display :%s  user %-10s  xephyr %-7s  %s  started %s\n' \
+      "$_ls_slot" "$_ls_slot" \
+      "$(cat "$_ls_dir/user" 2>/dev/null || echo '?')" \
+      "$(cat "$_ls_dir/xephyr.pid" 2>/dev/null || echo '?')" \
+      "$_ls_state" \
+      "$(cat "$_ls_dir/started" 2>/dev/null || echo '?')"
+  done
+  [ -n "$_ls_found" ] || msg "no nested sessions"
+}
+
+start_session()
+{
+  [ -n "${DISPLAY:-}" ] || die "DISPLAY is not set - a nested session needs a desktop to show its window on"
+  command -v Xephyr >/dev/null 2>&1 || die "Xephyr is not installed"
+  command -v xdpyinfo >/dev/null 2>&1 || die "xdpyinfo is not installed"
+  # An X server that has run out of client slots still exists but accepts
+  # nobody, so the window would never appear; say so instead of timing out.
+  xdpyinfo >/dev/null 2>&1 || \
+    die "cannot open your own display $DISPLAY - no window can be shown there"
+  [ -x "$WINDOWMANAGER" ] || die "$WINDOWMANAGER is missing - is Gershwin installed?"
+
+  mkdir -p "$STATE_ROOT" 2>/dev/null || die "cannot create $STATE_ROOT"
+  # Sessions of different users share the state root, so it is sticky like
+  # /tmp: everybody may claim a slot, nobody may remove someone else's.
+  chmod 1777 "$STATE_ROOT" 2>/dev/null || true
+
+  reap_stale
+
+  if [ -n "$SLOT" ]; then
+    slot_busy "$SLOT" && die "slot $SLOT is busy"
+    mkdir "$STATE_ROOT/$SLOT" 2>/dev/null || die "cannot claim slot $SLOT"
+  else
+    claim_slot || die "no free slot between $MIN_SLOT and $MAX_SLOT"
+  fi
+  SLOT_DIR=$STATE_ROOT/$SLOT
+  trap 'cleanup; exit 130' INT
+  trap 'cleanup; exit 143' TERM
+  trap 'cleanup; exit 129' HUP
+  trap 'cleanup' EXIT
+
+  [ -n "$SLOT_USER" ] || SLOT_USER=$USER_PREFIX$SLOT
+  ensure_user "$SLOT_USER" || die "cannot create session user $SLOT_USER"
+  SLOT_HOME=$(user_home "$SLOT_USER")
+  [ -n "$SLOT_HOME" ] || die "cannot determine the home directory of $SLOT_USER"
+
+  printf '%s\n' "$SLOT_USER" > "$SLOT_DIR/user"
+  printf ':%s\n' "$SLOT" > "$SLOT_DIR/display"
+  printf '%s\n' "$(id -un)" > "$SLOT_DIR/owner"
+  date > "$SLOT_DIR/started"
+  mkdir -p "$SLOT_DIR/logs"
+  # The desktop writes its own logs, so the directory has to belong to it.
+  run_root chown "$SLOT_USER" "$SLOT_DIR/logs" >/dev/null 2>&1 || \
+    chmod 1777 "$SLOT_DIR/logs" 2>/dev/null || true
+
+  # Processes of an earlier session of this user (a run that was killed before
+  # it could clean up) would fight the new desktop for the name server.
+  run_root pkill -KILL -u "$SLOT_USER" >/dev/null 2>&1 || true
+  _uid=$(id -u "$SLOT_USER")
+  run_root rm -rf "/tmp/GNUstepSecure$_uid" >/dev/null 2>&1 || true
+
+  # Not every Xephyr has these, and an unknown option makes it exit at once.
+  XEPHYR_OPTS=
+  _xephyr_help=$(Xephyr -help 2>&1 || true)
+  case $_xephyr_help in
+    *-resizeable*) XEPHYR_OPTS="$XEPHYR_OPTS -resizeable" ;;
+  esac
+  case $_xephyr_help in
+    *-no-host-grab*) XEPHYR_OPTS="$XEPHYR_OPTS -no-host-grab" ;;
+  esac
+  case $_xephyr_help in
+    *-host-cursor*) XEPHYR_OPTS="$XEPHYR_OPTS -host-cursor" ;;
+  esac
+
+  msg "starting nested session on :$SLOT as $SLOT_USER ($SCREEN)"
+  # shellcheck disable=SC2086
+  Xephyr ":$SLOT" -screen "$SCREEN" -ac -nolisten tcp -noreset \
+    -title "Gershwin nested session :$SLOT" $XEPHYR_OPTS \
+    >"$SLOT_DIR/xephyr.log" 2>&1 &
+  XEPHYR_PID=$!
+  printf '%s\n' "$XEPHYR_PID" > "$SLOT_DIR/xephyr.pid"
+
+  _i=0
+  while [ "$_i" -lt 30 ]; do
+    display_up "$SLOT" && break
+    kill -0 "$XEPHYR_PID" 2>/dev/null || break
+    sleep 1
+    _i=$((_i + 1))
+  done
+  display_up "$SLOT" || {
+    warn "Xephyr did not come up on :$SLOT:"
+    tail -n 5 "$SLOT_DIR/xephyr.log" >&2 2>/dev/null || true
+    exit 1
+  }
+
+  # The desktop exposes a DriveUI socket only when the bundle is loaded at
+  # startup, which makes the nested session drivable by the UI tests.
+  if [ -d "$DRIVEUI_BUNDLE" ]; then
+    as_user "$SLOT_USER" env HOME="$SLOT_HOME" \
+      GNUSTEP_USER_ROOT="$SLOT_HOME/.GNUstep" \
+      sh -c "defaults write NSGlobalDomain GSAppKitUserBundles '(\"$DRIVEUI_BUNDLE\")'" \
+      >/dev/null 2>&1 || true
+  fi
+
+  # Started from a directory the session user cannot read, the GNUstep apps
+  # die at once on their own working directory, hence the cd.
+  as_user "$SLOT_USER" sh -c '
+    cd /tmp || exit 1
+    export DISPLAY="$1" HOME="$2"
+    export GNUSTEP_SYSTEM_ROOT=/System GNUSTEP_LOCAL_ROOT=/Local GNUSTEP_NETWORK_ROOT=/Network
+    export GNUSTEP_USER_ROOT="$2/.GNUstep"
+    export FONTCONFIG_FILE=/System/Library/Preferences/fonts.conf
+    export FONTCONFIG_PATH=/System/Library/Preferences
+    export PATH=/System/Library/Tools:/usr/local/bin:/usr/bin:/bin
+    . "$4"
+    if command -v dbus-launch >/dev/null 2>&1; then
+      eval $(dbus-launch --sh-syntax)
+      printf "%s\n" "$DBUS_SESSION_BUS_ADDRESS" > "$3/logs/dbus.txt"
+    fi
+    "$5" >"$3/logs/menu.log" 2>&1 &
+    "$6" >"$3/logs/wm.log" 2>&1 &
+    "$7" >"$3/logs/ws.log" 2>&1 &
+  ' _ ":$SLOT" "$SLOT_HOME" "$SLOT_DIR" "$GNUSTEP_SH" \
+    "$MENU" "$WINDOWMANAGER" "$WORKSPACE" || die "cannot start the desktop as $SLOT_USER"
+
+  _i=0
+  while [ "$_i" -lt 30 ]; do
+    pgrep -u "$SLOT_USER" -x Workspace >/dev/null 2>&1 && break
+    sleep 1
+    _i=$((_i + 1))
+  done
+  msg "logs in $SLOT_DIR/logs"
+
+  if [ -n "$DETACH" ]; then
+    KEEP=1
+    msg "session :$SLOT running in the background; stop it with: $PROGRAM -k $SLOT"
+    return 0
+  fi
+
+  msg "close the window or press Ctrl-C to end the session"
+  # Waiting on the window server, not on the desktop: the session lives
+  # exactly as long as the window the user is watching.
+  wait "$XEPHYR_PID"
+  msg "session window closed"
+}
+
+ACTION=start
+STOP_TARGET=
+
+while [ $# -gt 0 ]; do
+  case $1 in
+    -s|--size)
+      [ $# -ge 2 ] || die "$1 needs an argument"
+      SCREEN=$2
+      shift 2
+      ;;
+    -n|--slot)
+      [ $# -ge 2 ] || die "$1 needs an argument"
+      SLOT=$2
+      shift 2
+      ;;
+    -u|--user)
+      [ $# -ge 2 ] || die "$1 needs an argument"
+      SLOT_USER=$2
+      shift 2
+      ;;
+    -d|--detach)
+      DETACH=1
+      shift
+      ;;
+    -k|--stop)
+      [ $# -ge 2 ] || die "$1 needs an argument"
+      ACTION=stop
+      STOP_TARGET=$2
+      shift 2
+      ;;
+    -l|--list)
+      ACTION=list
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    *)
+      usage >&2
+      die "unknown option: $1"
+      ;;
+  esac
+done
+
+screen_width=${SCREEN%%x*}
+screen_height=${SCREEN#*x}
+case $screen_width in
+  ''|*[!0-9]*) die "bad screen size '$SCREEN', expected something like 1280x800" ;;
+esac
+case $screen_height in
+  ''|*[!0-9]*) die "bad screen size '$SCREEN', expected something like 1280x800" ;;
+esac
+
+if [ -n "$SLOT" ]; then
+  case $SLOT in
+    ''|*[!0-9]*) die "bad slot '$SLOT'" ;;
+  esac
+  { [ "$SLOT" -ge "$MIN_SLOT" ] && [ "$SLOT" -le "$MAX_SLOT" ]; } || \
+    die "slot $SLOT is outside $MIN_SLOT..$MAX_SLOT"
+fi
+
+case $ACTION in
+  list)
+    list_sessions
+    ;;
+  stop)
+    if [ "$STOP_TARGET" = all ]; then
+      [ -d "$STATE_ROOT" ] || { msg "no nested sessions"; exit 0; }
+      for d in "$STATE_ROOT"/*; do
+        [ -d "$d" ] || continue
+        n=${d##*/}
+        case $n in
+          ''|*[!0-9]*) continue ;;
+        esac
+        stop_slot "$n"
+      done
+    else
+      case $STOP_TARGET in
+        ''|*[!0-9]*) die "bad slot '$STOP_TARGET'" ;;
+      esac
+      [ -d "$STATE_ROOT/$STOP_TARGET" ] || die "no session in slot $STOP_TARGET"
+      stop_slot "$STOP_TARGET"
+    fi
+    ;;
+  start)
+    # A crashing session must not leave the desktop user's processes behind,
+    # so cores are allowed but nothing else outlives this script.
+    ulimit -Hc unlimited 2>/dev/null || true
+    ulimit -c unlimited 2>/dev/null || true
+    start_session
+    ;;
+esac
