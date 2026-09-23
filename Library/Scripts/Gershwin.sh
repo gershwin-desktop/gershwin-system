@@ -48,6 +48,21 @@ fi
 # Supervise the desktop apps: gershwin-session (the session supervisor)
 # restarts any of them that exits and shuts them all down when this session
 # ends. The app names are passed as arguments so the desktop composition
-# stays configurable per flavor. For development, send SIGUSR1/SIGUSR2 to
-# the gershwin-session process to disable or re-enable the auto restart.
-exec gershwin-session Workspace Menu WindowManager
+# stays configurable per flavor.
+#
+# Disabling the auto restart (for example while debugging a crash, so the
+# supervisor does not immediately relaunch the crashed app and wipe the
+# crash site):
+#   kill -USR1 "$(pgrep -x gershwin-session)"      # disable auto restart
+#   kill -USR2 "$(pgrep -x gershwin-session)"      # re-enable auto restart
+# gershwin-session also exports its own pid in $GERSHWIN_SESSION_PID, so from
+# inside a supervised app the equivalent is: kill -USR1 "$GERSHWIN_SESSION_PID".
+# While auto restart is disabled, an app that exits is simply left down, so a
+# developer can keep a broken instance stopped for inspection instead of it
+# being respawned every quarter second.
+#
+# gs-crashd is the CrashReporter daemon: it watches for application crashes
+# (cores in its inbox and in-process markers) and records analyzed reports.
+# Running it under gershwin-session keeps it alive for the whole user session
+# and auto-restarts it if it ever exits unexpectedly.
+exec gershwin-session Workspace Menu WindowManager gs-crashd
