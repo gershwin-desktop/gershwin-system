@@ -45,6 +45,16 @@ if [ -e /System/Library/Tools/SudoAskPass ] ; then
   export SUDO_ASKPASS=/System/Library/Tools/SudoAskPass
 fi
 
+# The preference panes apply a change live and save it to the user's
+# defaults, but keyboard layout, pointer settings, screen blanking, backlight,
+# CPU governor and display profiles are reset by a restart of the machine or
+# the X server. Put the saved ones back now that the X server and the
+# defaults are available; none of them needs the WindowManager, so the
+# desktop is not held up while it runs. Its report goes to the session log.
+if which gershwin-apply-settings >/dev/null 2>&1; then
+  gershwin-apply-settings &
+fi
+
 # Supervise the desktop apps: gershwin-session (the session supervisor)
 # restarts any of them that exits and shuts them all down when this session
 # ends. The app names are passed as arguments so the desktop composition
