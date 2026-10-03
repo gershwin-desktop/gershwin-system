@@ -36,10 +36,12 @@ if which Menu >/dev/null 2>&1; then
   if [ -z "$DBUS_SESSION_BUS_ADDRESS" ] ; then
     export $(dbus-launch)
   fi
-  # Make GTK 2 and GTK 3 applications show their menus in Menu, through the
-  # module that is installed together with Menu (Menu/GTKModule).
-  export GTK_PATH=/System/Library/Libraries/gtk-appmenu-do${GTK_PATH:+:$GTK_PATH}
+  # Make GTK 2/3 and Qt 5/6 applications show their menus in Menu, through the
+  # modules that are installed together with Menu (Menu/ToolkitModules).
+  export GTK_PATH=/System/Library/Libraries/appmenu-do${GTK_PATH:+:$GTK_PATH}
   export GTK_MODULES=gtk-appmenu-do
+  export QT_PLUGIN_PATH=/System/Library/Libraries/appmenu-do${QT_PLUGIN_PATH:+:$QT_PLUGIN_PATH}
+  export QT_QPA_PLATFORMTHEME=gad
 fi
 
 if [ -e /System/Library/Tools/SudoAskPass ] ; then
