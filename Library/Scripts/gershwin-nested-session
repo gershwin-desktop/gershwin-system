@@ -376,6 +376,8 @@ start_session()
       eval $(dbus-launch --sh-syntax)
       printf "%s\n" "$DBUS_SESSION_BUS_ADDRESS" > "$3/logs/dbus.txt"
     fi
+    # GTK programs show their menus in Menu (Menu/GTKModule)
+    export GTK_PATH=/System/Library/Libraries/gtk-appmenu-do${GTK_PATH:+:$GTK_PATH} GTK_MODULES=gtk-appmenu-do
     "$5" >"$3/logs/menu.log" 2>&1 &
     "$6" >"$3/logs/wm.log" 2>&1 &
     "$7" >"$3/logs/ws.log" 2>&1 &

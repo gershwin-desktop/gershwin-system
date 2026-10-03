@@ -36,9 +36,10 @@ if which Menu >/dev/null 2>&1; then
   if [ -z "$DBUS_SESSION_BUS_ADDRESS" ] ; then
     export $(dbus-launch)
   fi
-  # Make GTK applications use Menu; this requires e.g., on Debian:
-  # sudo apt-get -y install appmenu-gtk2-module appmenu-gtk3-module
-  export GTK_MODULES=appmenu-gtk-module
+  # Make GTK 2 and GTK 3 applications show their menus in Menu, through the
+  # module that is installed together with Menu (Menu/GTKModule).
+  export GTK_PATH=/System/Library/Libraries/gtk-appmenu-do${GTK_PATH:+:$GTK_PATH}
+  export GTK_MODULES=gtk-appmenu-do
 fi
 
 if [ -e /System/Library/Tools/SudoAskPass ] ; then
