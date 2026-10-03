@@ -25,6 +25,11 @@ export XDG_CURRENT_DESKTOP="Gershwin"
 # sudo usermod -aG lpadmin $USER
 
 # Launch devmon automounter if it is available (udevil package on Devuan).
+# The subshell is a foreground command, so this shell waits for it and reaps
+# it, while devmon itself is reparented to init when that subshell exits. A
+# trailing "&" here would make the subshell a child of the long-lived process
+# this script becomes (see the note on gershwin-apply-settings below), and a
+# child nobody waits for stays a zombie for the whole login.
 if which devmon >/dev/null 2>&1; then
   (devmon &)
 fi
@@ -54,8 +59,16 @@ fi
 # the X server. Put the saved ones back now that the X server and the
 # defaults are available; none of them needs the WindowManager, so the
 # desktop is not held up while it runs. Its report goes to the session log.
+#
+# It runs inside a subshell that starts it in the background and returns at
+# once: this script then execs into gershwin-session, which inherits every
+# child it had left, and a supervisor that never waits for a child leaves its
+# corpse behind as a zombie for the rest of the login. The subshell is waited
+# for here (it is a foreground command), and the applier itself is reparented
+# to init when that subshell exits, so init reaps it instead. A plain
+# "gershwin-apply-settings &" is what produced the permanent zombie.
 if which gershwin-apply-settings >/dev/null 2>&1; then
-  gershwin-apply-settings &
+  ( gershwin-apply-settings & )
 fi
 
 # Supervise the desktop apps: gershwin-session (the session supervisor)
@@ -78,4 +91,22 @@ fi
 # (cores in its inbox and in-process markers) and records analyzed reports.
 # Running it under gershwin-session keeps it alive for the whole user session
 # and auto-restarts it if it ever exits unexpectedly.
-exec gershwin-session Workspace Menu WindowManager gs-crashd
+#
+# Only names that resolve to something on the $PATH are handed to the
+# supervisor. gershwin-session relaunches an app as soon as it exits, so
+# supervising a name that is not installed means /usr/bin/env is forked
+# several times a second for the whole session: it fails instantly, so every
+# attempt leaves a zombie child behind and the supervisor burns CPU forever
+# trying to start a program that is not there. A flavor that does not ship
+# gs-crashd is the usual reason for such a name to be missing.
+GERSHWIN_SESSION_APPS=
+for app in Workspace Menu WindowManager gs-crashd; do
+  if which "$app" >/dev/null 2>&1; then
+    GERSHWIN_SESSION_APPS="$GERSHWIN_SESSION_APPS $app"
+  else
+    echo "Gershwin.sh: $app is not installed; not supervising it." >&2
+  fi
+done
+
+# shellcheck disable=SC2086 # deliberate word splitting into a list of names
+exec gershwin-session $GERSHWIN_SESSION_APPS
