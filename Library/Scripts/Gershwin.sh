@@ -41,12 +41,13 @@ if which Menu >/dev/null 2>&1; then
   if [ -z "$DBUS_SESSION_BUS_ADDRESS" ] ; then
     export $(dbus-launch)
   fi
-  # Make GTK 2/3 and Qt 5/6 applications show their menus in Menu, through the
+  # Make GTK 2/3/4 and Qt 5/6 applications show their menus in Menu, through the
   # modules that are installed together with Menu (Menu/ToolkitModules).
   export GTK_PATH=/System/Library/Libraries/appmenu-do${GTK_PATH:+:$GTK_PATH}
   export GTK_MODULES=gtk-appmenu-do
   export QT_PLUGIN_PATH=/System/Library/Libraries/appmenu-do${QT_PLUGIN_PATH:+:$QT_PLUGIN_PATH}
   export QT_QPA_PLATFORMTHEME=gad
+  export GIO_EXTRA_MODULES=/System/Library/Libraries/appmenu-do/gio/modules${GIO_EXTRA_MODULES:+:$GIO_EXTRA_MODULES}
 fi
 
 if [ -e /System/Library/Tools/SudoAskPass ] ; then
