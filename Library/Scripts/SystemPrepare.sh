@@ -128,6 +128,11 @@ install_debian_packages() {
     if pkg=$(pick_package xinit); then add_pkg "$pkg"; fi
     if pkg=$(pick_package dbus-x11); then add_pkg "$pkg"; fi
     if pkg=$(pick_package psmisc); then add_pkg "$pkg"; fi
+    # Services enabled by enable_debian_services; the desktop needs the system
+    # bus, mDNS (Sharing) and printing
+    if pkg=$(pick_package dbus); then add_pkg "$pkg"; fi
+    if pkg=$(pick_package avahi-daemon); then add_pkg "$pkg"; fi
+    if pkg=$(pick_package cups); then add_pkg "$pkg"; fi
     if pkg=$(pick_package x11-utils); then add_pkg "$pkg"; fi
     if pkg=$(pick_package xdotool); then add_pkg "$pkg"; fi
     if pkg=$(pick_package x11-xkb-utils); then add_pkg "$pkg"; fi
@@ -650,7 +655,8 @@ configure_kld_list() {
 # Enable and configure common FreeBSD services
 enable_freebsd_services() {
     if command -v sysrc >/dev/null 2>&1; then
-        log "Enabling common FreeBSD services (cups, avahi, ntpd, clear_tmp)"
+        log "Enabling common FreeBSD services (dbus, cups, avahi, ntpd, clear_tmp)"
+        sysrc dbus_enable="YES" # Enable the D-Bus system bus (required by avahi and the desktop's hardware and power handling)
         sysrc cupsd_enable="YES" # Enable CUPS printing daemon
         sysrc avahi_daemon_enable="YES" # Enable Avahi mDNS/DNS-SD daemon for network service discovery
         sysrc avahi_dnsconfd_enable="YES" # Enable Avahi's DNS resolver integration
@@ -711,6 +717,38 @@ enable_dshelper() {
         update-rc.d dshelper defaults || log "Warning: failed to enable dshelper via update-rc.d"
     else
         log "No supported init system detected for dshelper"
+    fi
+}
+
+# Enable one service on Debian-like systems, whichever init system is running
+enable_debian_service() {
+    svc="$1"
+    if is_systemd; then
+        if systemctl list-unit-files "${svc}.service" 2>/dev/null | grep -q "^${svc}\.service"; then
+            systemctl enable "$svc" || log "Warning: failed to enable $svc via systemctl"
+        else
+            log "Warning: no systemd unit for $svc; is its package installed?"
+        fi
+    elif [ -x "/etc/init.d/$svc" ] && command -v update-rc.d >/dev/null 2>&1; then
+        update-rc.d "$svc" defaults || log "Warning: failed to enable $svc via update-rc.d"
+    else
+        log "Warning: no init script for $svc; is its package installed?"
+    fi
+}
+
+# Enable the services the desktop depends on that Debian-like systems do not
+# necessarily enable by themselves. rpcbind is deliberately not enabled: dshelper
+# and gdomap do not need it.
+enable_debian_services() {
+    log "Enabling system services (dbus, avahi-daemon, cups)"
+    enable_debian_service dbus
+    enable_debian_service avahi-daemon
+    enable_debian_service cups
+
+    # Under systemd, logind is part of systemd itself; elsewhere elogind provides
+    # the login sessions that polkit and the power actions need
+    if ! is_systemd; then
+        enable_debian_service elogind
     fi
 }
 
@@ -840,6 +878,7 @@ main() {
     if is_debian_like; then
         # Debian/Devuan-specific steps
         add_users_to_video_group_debian
+        enable_debian_services
         change_elogind_conf
 
         install_amlogic_xorg_conf
