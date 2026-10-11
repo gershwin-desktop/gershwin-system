@@ -6,6 +6,27 @@ This project contains files that get populated in `/System` that are not part of
 
 See https://github.com/gershwin-desktop/gershwin-desktop/wiki
 
+## SystemPrepare
+
+After installing Gershwin on FreeBSD, GhostBSD, Debian, Devuan or Raspberry Pi OS, run as root:
+
+```sh
+sh /System/Library/Scripts/SystemPrepare.sh
+```
+
+It is safe to re-run. It installs the supporting packages and enables the services the desktop needs, so that they start at the next boot (set `REBOOT=1` to reboot at the end):
+
+| Service | FreeBSD / GhostBSD (rc.conf) | Linux with systemd | Linux with sysvinit (Devuan) |
+| --- | --- | --- | --- |
+| LoginWindow (graphical login) | `loginwindow` | `loginwindow` | `loginwindow` (init script, runlevel 5) |
+| Directory Services (dshelper, starts gdomap) | `dshelper` | `dshelper`, `gdomap` | `dshelper` (starts gdomap) |
+| D-Bus system bus | `dbus` | `dbus` | `dbus` |
+| mDNS (avahi, Linux only) | - | `avahi-daemon` | `avahi-daemon` |
+| Printing (CUPS) | `cupsd` | `cups` | `cups` |
+| Time synchronization | `ntpd` | - | - |
+
+`rpcbind` is not needed and is not enabled. OpenBSD and Arch Linux are not supported by this script yet.
+
 ## Image based "installation"
 
 There is an _experimental_ way to "install" Gershwin on FreeBSD by using a Gershwin filesystem image which is under 20 MB in size:
