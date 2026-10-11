@@ -70,6 +70,16 @@ if which Menu >/dev/null 2>&1; then
   export GIO_EXTRA_MODULES=/System/Library/Libraries/appmenu-do/gio/modules${GIO_EXTRA_MODULES:+:$GIO_EXTRA_MODULES}
 fi
 
+# Give GTK 3 windows with a header bar the window manager's title bar instead
+# of a second one drawn by the application (gershwin-components GtkNoCSD).
+# The library is an optional component, so it is only preloaded where it is
+# installed.
+GTK_NOCSD=/System/Library/Libraries/libgershwin-gtk-nocsd.so
+if [ -e "$GTK_NOCSD" ] ; then
+  export LD_PRELOAD=${LD_PRELOAD:+$LD_PRELOAD:}$GTK_NOCSD
+fi
+unset GTK_NOCSD
+
 if [ -e /System/Library/Tools/SudoAskPass ] ; then
   export SUDO_ASKPASS=/System/Library/Tools/SudoAskPass
 fi
