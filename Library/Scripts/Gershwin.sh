@@ -9,7 +9,9 @@
 
 . /System/Library/Makefiles/GNUstep.sh
 
-export DISPLAY=:0
+# A session started on another display (remote desktop through xrdp, a nested
+# X server) must keep its display; :0 is only the default of the local login.
+export DISPLAY="${DISPLAY:-:0}"
 
 export PATH=$HOME/Library/Tools:/Local/Library/Tools:/System/Library/Tools/:$PATH
 
