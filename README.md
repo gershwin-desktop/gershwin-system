@@ -21,8 +21,7 @@ It is safe to re-run. It installs the supporting packages and enables the servic
 | LoginWindow (graphical login) | `loginwindow` | `loginwindow` | `loginwindow` (init script, runlevel 5) |
 | Directory Services (dshelper, starts gdomap) | `dshelper` | `dshelper`, `gdomap` | `dshelper` (starts gdomap) |
 | D-Bus system bus | `dbus` | `dbus` | `dbus` |
-| elogind (login sessions) | - | part of systemd | `elogind` |
-| mDNS (avahi) | `avahi_daemon`, `avahi_dnsconfd` | `avahi-daemon` | `avahi-daemon` |
+| mDNS (avahi, Linux only) | - | `avahi-daemon` | `avahi-daemon` |
 | Printing (CUPS) | `cupsd` | `cups` | `cups` |
 | Time synchronization | `ntpd` | - | - |
 

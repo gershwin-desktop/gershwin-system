@@ -655,11 +655,9 @@ configure_kld_list() {
 # Enable and configure common FreeBSD services
 enable_freebsd_services() {
     if command -v sysrc >/dev/null 2>&1; then
-        log "Enabling common FreeBSD services (dbus, cups, avahi, ntpd, clear_tmp)"
-        sysrc dbus_enable="YES" # Enable the D-Bus system bus (required by avahi and the desktop's hardware and power handling)
+        log "Enabling common FreeBSD services (dbus, cups, ntpd, clear_tmp)"
+        sysrc dbus_enable="YES" # Enable the D-Bus system bus (used by the desktop's hardware and power handling)
         sysrc cupsd_enable="YES" # Enable CUPS printing daemon
-        sysrc avahi_daemon_enable="YES" # Enable Avahi mDNS/DNS-SD daemon for network service discovery
-        sysrc avahi_dnsconfd_enable="YES" # Enable Avahi's DNS resolver integration
         sysrc ntpd_enable="YES" # Enable NTP daemon for time synchronization
         sysrc ntpd_sync_on_start="YES" # Force ntpd to sync immediately on start
         sysrc clear_tmp_enable="YES" # Enable clearing of /tmp at boot
@@ -744,12 +742,6 @@ enable_debian_services() {
     enable_debian_service dbus
     enable_debian_service avahi-daemon
     enable_debian_service cups
-
-    # Under systemd, logind is part of systemd itself; elsewhere elogind provides
-    # the login sessions that polkit and the power actions need
-    if ! is_systemd; then
-        enable_debian_service elogind
-    fi
 }
 
 # Enable LoginWindow service so the graphical login is started at boot
