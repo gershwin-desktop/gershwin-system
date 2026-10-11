@@ -20,6 +20,25 @@ export FONTCONFIG_FILE=$FONTCONFIG_PATH/fonts.conf
 # Indicate Gershwin Desktop to tools like Fastfetch
 export XDG_CURRENT_DESKTOP="Gershwin"
 
+# VS Code (and VSCodium, Code - OSS) draw their own menu bar inside the window
+# unless told to use the native one, and then never export their menu to the
+# global menu bar; they also start dark. Give a user who has no settings yet
+# the native menu and a light theme. An existing settings.json is never
+# touched, so whatever the user chose stays.
+for vscode in "code:Code" "codium:VSCodium" "code-oss:Code - OSS"; do
+  command -v "${vscode%%:*}" >/dev/null 2>&1 || continue
+  vscode_settings="${XDG_CONFIG_HOME:-$HOME/.config}/${vscode#*:}/User/settings.json"
+  [ -e "$vscode_settings" ] && continue
+  mkdir -p "$(dirname "$vscode_settings")" && cat > "$vscode_settings" <<'VSCODE_SETTINGS'
+{
+    "window.titleBarStyle": "native",
+    "window.menuStyle": "native",
+    "workbench.colorTheme": "Default Light Modern"
+}
+VSCODE_SETTINGS
+done
+unset vscode vscode_settings
+
 # Allow users to access CUPS at http://localhost:631/admin/; TODO: Move in a suitable place
 # Cannot run it like this here because e.g., on stock FreeBSD there is no sudo
 # sudo usermod -aG lpadmin $USER
