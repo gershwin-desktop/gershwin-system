@@ -1,16 +1,11 @@
 #!/bin/sh
 
-# Exclude for NextBSD since this will break Terminal with nextbsd-linux chroot
-if [ "$(uname -s)" = "NextBSD" ]; then
-  return 0
-else
-  # If $SHELL is /bin/sh or unset, then set bash if possible
-  [ "${SHELL:-/bin/sh}" != /bin/sh ] || {
-    for b in /usr/local/bin/bash /usr/bin/bash /bin/bash /bin/sh; do
-      [ -x "$b" ] && { export SHELL="$b"; break; }
-    done
-  }
-fi
+# If $SHELL is /bin/sh or unset, then set bash if possible
+[ "${SHELL:-/bin/sh}" != /bin/sh ] || {
+  for b in /usr/local/bin/bash /usr/bin/bash /bin/bash /bin/sh; do
+    [ -x "$b" ] && { export SHELL="$b"; break; }
+  done
+}
 
 . /System/Library/Makefiles/GNUstep.sh
 
