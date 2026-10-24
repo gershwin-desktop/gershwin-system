@@ -125,14 +125,14 @@ fi
 # Running it under gershwin-session keeps it alive for the whole user session
 # and auto-restarts it if it ever exits unexpectedly.
 #
-# gwmidid is the per-user network MIDI daemon: it shares the MIDI sessions
+# networkmidid is the per-user network MIDI daemon: it shares the MIDI sessions
 # the user set up in the MIDI pane with other computers on the network.
 # Like gs-crashd it belongs to the session and is restarted with it.
 # OpenBSD has no MIDI port layer for it yet: it would exit at once and be
 # restarted again and again, so it is left out there.
-GWMIDID=gwmidid
+NETWORKMIDID=networkmidid
 if [ "$(uname -s)" = OpenBSD ]; then
-  GWMIDID=
+  NETWORKMIDID=
 fi
 #
 # Only names that resolve to something on the $PATH are handed to the
@@ -143,7 +143,7 @@ fi
 # trying to start a program that is not there. A flavor that does not ship
 # gs-crashd is the usual reason for such a name to be missing.
 GERSHWIN_SESSION_APPS=
-for app in Workspace Menu WindowManager gs-crashd $GWMIDID; do
+for app in Workspace Menu WindowManager gs-crashd $NETWORKMIDID; do
   if which "$app" >/dev/null 2>&1; then
     GERSHWIN_SESSION_APPS="$GERSHWIN_SESSION_APPS $app"
   else
