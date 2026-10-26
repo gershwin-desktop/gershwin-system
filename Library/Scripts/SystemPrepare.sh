@@ -564,6 +564,86 @@ EOF
     fi
 }
 
+# udevil is the automounter behind devmon, which Gershwin.sh starts at login.
+# Its stock configuration mounts every filesystem with noexec, so programs
+# stored on removable disks cannot be run. Replace noexec with exec in the
+# option lists; nosuid and nodev stay, so setuid binaries and device nodes on
+# such media are still ignored.
+#
+# Each default_options* line is rewritten together with the matching
+# allowed_options* lines: udevil rejects a default option that is not also
+# allowed, and the shipped file always lists the same tokens in both, so the
+# substitution keeps that invariant.
+#
+# The edit is done on a copy and moved into place, so a failure at any step
+# leaves the installed file untouched. The function never fails the script:
+# udevil may simply not be installed, and this step is not essential for the
+# rest of the preparation. Per-user overrides (udevil-user-NAME.conf) are not
+# touched; an administrator who creates one chooses its options explicitly.
+configure_udevil_mount_options() {
+    UDEVIL_CONF="/etc/udevil/udevil.conf"
+
+    if [ ! -f "$UDEVIL_CONF" ]; then
+        log "udevil is not installed; skipping mount option configuration"
+        return 0
+    fi
+
+    # Replacing a link with a regular file would silently detach it from
+    # wherever it points; leave unusual layouts to the administrator.
+    if [ -L "$UDEVIL_CONF" ]; then
+        log "Warning: $UDEVIL_CONF is a symbolic link; leaving it unchanged"
+        return 0
+    fi
+
+    # Only option assignments count, not the comments around them.
+    UDEVIL_NOEXEC='^[[:space:]]*(default_options|allowed_options)[^[:space:]]*[[:space:]]*=.*noexec'
+
+    if ! grep -Eq "$UDEVIL_NOEXEC" "$UDEVIL_CONF" 2>/dev/null; then
+        log "udevil already mounts disks with exec; nothing to change"
+        return 0
+    fi
+
+    UDEVIL_TMP="${UDEVIL_CONF}.gershwin.$$"
+
+    # Copy first so the replacement keeps the original owner, mode and times;
+    # redirecting into the existing file preserves them.
+    if ! cp -p "$UDEVIL_CONF" "$UDEVIL_TMP" 2>/dev/null; then
+        rm -f "$UDEVIL_TMP"
+        log "Warning: could not create $UDEVIL_TMP; leaving $UDEVIL_CONF unchanged"
+        return 0
+    fi
+
+    if ! sed -e '/^[[:space:]]*default_options/ s/noexec/exec/g' \
+             -e '/^[[:space:]]*allowed_options/ s/noexec/exec/g' \
+             "$UDEVIL_CONF" >"$UDEVIL_TMP" 2>/dev/null; then
+        rm -f "$UDEVIL_TMP"
+        log "Warning: could not rewrite $UDEVIL_CONF; leaving it unchanged"
+        return 0
+    fi
+
+    # Refuse to install an empty or incomplete result.
+    if [ ! -s "$UDEVIL_TMP" ] || grep -Eq "$UDEVIL_NOEXEC" "$UDEVIL_TMP" 2>/dev/null; then
+        rm -f "$UDEVIL_TMP"
+        log "Warning: rewrite of $UDEVIL_CONF was incomplete; leaving it unchanged"
+        return 0
+    fi
+
+    # Keep the package's original once, in case the change has to be undone.
+    if [ ! -f "${UDEVIL_CONF}.gershwin.bak" ]; then
+        cp -p "$UDEVIL_CONF" "${UDEVIL_CONF}.gershwin.bak" 2>/dev/null || \
+            log "Warning: could not back up $UDEVIL_CONF"
+    fi
+
+    if mv -f "$UDEVIL_TMP" "$UDEVIL_CONF" 2>/dev/null; then
+        log "udevil now mounts disks with exec ($UDEVIL_CONF)"
+    else
+        rm -f "$UDEVIL_TMP"
+        log "Warning: could not replace $UDEVIL_CONF; leaving it unchanged"
+    fi
+
+    return 0
+}
+
 install_packages() {
     if is_debian_like; then
         install_debian_packages
@@ -858,6 +938,10 @@ main() {
 
     configure_pkg_repo
     install_packages
+
+    # Removable media must stay executable; udevil (devmon) is the automounter
+    # that mounts them, so patch its configuration before anyone logs in.
+    configure_udevil_mount_options
 
     # Boot splash (plymouth) - safe on all platforms: install-plymouth.sh
     # exits 0 on unsupported distributions.
