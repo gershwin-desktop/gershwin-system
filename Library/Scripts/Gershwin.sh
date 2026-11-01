@@ -51,8 +51,11 @@ unset vscode vscode_settings
 # trailing "&" here would make the subshell a child of the long-lived process
 # this script becomes (see the note on gershwin-apply-settings below), and a
 # child nobody waits for stays a zombie for the whole login.
+# devmon passes its own default options, which include noexec, to udevil, so
+# udevil.conf alone cannot let programs run from removable disks. nosuid and
+# nodev stay, so setuid binaries and device nodes on such media are ignored.
 if which devmon >/dev/null 2>&1; then
-  (devmon &)
+  (devmon --mount-options "nosuid,nodev,noatime" &)
 fi
 
 # D-Bus is required by Menu; only set up a session bus if none is there and
