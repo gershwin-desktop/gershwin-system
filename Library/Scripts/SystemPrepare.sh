@@ -128,6 +128,11 @@ install_debian_packages() {
     if pkg=$(pick_package xinit); then add_pkg "$pkg"; fi
     if pkg=$(pick_package dbus-x11); then add_pkg "$pkg"; fi
     if pkg=$(pick_package psmisc); then add_pkg "$pkg"; fi
+    # Services enabled by enable_debian_services; the desktop needs the system
+    # bus, mDNS (Sharing) and printing
+    if pkg=$(pick_package dbus); then add_pkg "$pkg"; fi
+    if pkg=$(pick_package avahi-daemon); then add_pkg "$pkg"; fi
+    if pkg=$(pick_package cups); then add_pkg "$pkg"; fi
     if pkg=$(pick_package x11-utils); then add_pkg "$pkg"; fi
     if pkg=$(pick_package xdotool); then add_pkg "$pkg"; fi
     if pkg=$(pick_package x11-xkb-utils); then add_pkg "$pkg"; fi
@@ -559,6 +564,86 @@ EOF
     fi
 }
 
+# udevil is the automounter behind devmon, which Gershwin.sh starts at login.
+# Its stock configuration mounts every filesystem with noexec, so programs
+# stored on removable disks cannot be run. Replace noexec with exec in the
+# option lists; nosuid and nodev stay, so setuid binaries and device nodes on
+# such media are still ignored.
+#
+# Each default_options* line is rewritten together with the matching
+# allowed_options* lines: udevil rejects a default option that is not also
+# allowed, and the shipped file always lists the same tokens in both, so the
+# substitution keeps that invariant.
+#
+# The edit is done on a copy and moved into place, so a failure at any step
+# leaves the installed file untouched. The function never fails the script:
+# udevil may simply not be installed, and this step is not essential for the
+# rest of the preparation. Per-user overrides (udevil-user-NAME.conf) are not
+# touched; an administrator who creates one chooses its options explicitly.
+configure_udevil_mount_options() {
+    UDEVIL_CONF="/etc/udevil/udevil.conf"
+
+    if [ ! -f "$UDEVIL_CONF" ]; then
+        log "udevil is not installed; skipping mount option configuration"
+        return 0
+    fi
+
+    # Replacing a link with a regular file would silently detach it from
+    # wherever it points; leave unusual layouts to the administrator.
+    if [ -L "$UDEVIL_CONF" ]; then
+        log "Warning: $UDEVIL_CONF is a symbolic link; leaving it unchanged"
+        return 0
+    fi
+
+    # Only option assignments count, not the comments around them.
+    UDEVIL_NOEXEC='^[[:space:]]*(default_options|allowed_options)[^[:space:]]*[[:space:]]*=.*noexec'
+
+    if ! grep -Eq "$UDEVIL_NOEXEC" "$UDEVIL_CONF" 2>/dev/null; then
+        log "udevil already mounts disks with exec; nothing to change"
+        return 0
+    fi
+
+    UDEVIL_TMP="${UDEVIL_CONF}.gershwin.$$"
+
+    # Copy first so the replacement keeps the original owner, mode and times;
+    # redirecting into the existing file preserves them.
+    if ! cp -p "$UDEVIL_CONF" "$UDEVIL_TMP" 2>/dev/null; then
+        rm -f "$UDEVIL_TMP"
+        log "Warning: could not create $UDEVIL_TMP; leaving $UDEVIL_CONF unchanged"
+        return 0
+    fi
+
+    if ! sed -e '/^[[:space:]]*default_options/ s/noexec/exec/g' \
+             -e '/^[[:space:]]*allowed_options/ s/noexec/exec/g' \
+             "$UDEVIL_CONF" >"$UDEVIL_TMP" 2>/dev/null; then
+        rm -f "$UDEVIL_TMP"
+        log "Warning: could not rewrite $UDEVIL_CONF; leaving it unchanged"
+        return 0
+    fi
+
+    # Refuse to install an empty or incomplete result.
+    if [ ! -s "$UDEVIL_TMP" ] || grep -Eq "$UDEVIL_NOEXEC" "$UDEVIL_TMP" 2>/dev/null; then
+        rm -f "$UDEVIL_TMP"
+        log "Warning: rewrite of $UDEVIL_CONF was incomplete; leaving it unchanged"
+        return 0
+    fi
+
+    # Keep the package's original once, in case the change has to be undone.
+    if [ ! -f "${UDEVIL_CONF}.gershwin.bak" ]; then
+        cp -p "$UDEVIL_CONF" "${UDEVIL_CONF}.gershwin.bak" 2>/dev/null || \
+            log "Warning: could not back up $UDEVIL_CONF"
+    fi
+
+    if mv -f "$UDEVIL_TMP" "$UDEVIL_CONF" 2>/dev/null; then
+        log "udevil now mounts disks with exec ($UDEVIL_CONF)"
+    else
+        rm -f "$UDEVIL_TMP"
+        log "Warning: could not replace $UDEVIL_CONF; leaving it unchanged"
+    fi
+
+    return 0
+}
+
 install_packages() {
     if is_debian_like; then
         install_debian_packages
@@ -650,10 +735,9 @@ configure_kld_list() {
 # Enable and configure common FreeBSD services
 enable_freebsd_services() {
     if command -v sysrc >/dev/null 2>&1; then
-        log "Enabling common FreeBSD services (cups, avahi, ntpd, clear_tmp)"
+        log "Enabling common FreeBSD services (dbus, cups, ntpd, clear_tmp)"
+        sysrc dbus_enable="YES" # Enable the D-Bus system bus (used by the desktop's hardware and power handling)
         sysrc cupsd_enable="YES" # Enable CUPS printing daemon
-        sysrc avahi_daemon_enable="YES" # Enable Avahi mDNS/DNS-SD daemon for network service discovery
-        sysrc avahi_dnsconfd_enable="YES" # Enable Avahi's DNS resolver integration
         sysrc ntpd_enable="YES" # Enable NTP daemon for time synchronization
         sysrc ntpd_sync_on_start="YES" # Force ntpd to sync immediately on start
         sysrc clear_tmp_enable="YES" # Enable clearing of /tmp at boot
@@ -712,6 +796,32 @@ enable_dshelper() {
     else
         log "No supported init system detected for dshelper"
     fi
+}
+
+# Enable one service on Debian-like systems, whichever init system is running
+enable_debian_service() {
+    svc="$1"
+    if is_systemd; then
+        if systemctl list-unit-files "${svc}.service" 2>/dev/null | grep -q "^${svc}\.service"; then
+            systemctl enable "$svc" || log "Warning: failed to enable $svc via systemctl"
+        else
+            log "Warning: no systemd unit for $svc; is its package installed?"
+        fi
+    elif [ -x "/etc/init.d/$svc" ] && command -v update-rc.d >/dev/null 2>&1; then
+        update-rc.d "$svc" defaults || log "Warning: failed to enable $svc via update-rc.d"
+    else
+        log "Warning: no init script for $svc; is its package installed?"
+    fi
+}
+
+# Enable the services the desktop depends on that Debian-like systems do not
+# necessarily enable by themselves. rpcbind is deliberately not enabled: dshelper
+# and gdomap do not need it.
+enable_debian_services() {
+    log "Enabling system services (dbus, avahi-daemon, cups)"
+    enable_debian_service dbus
+    enable_debian_service avahi-daemon
+    enable_debian_service cups
 }
 
 # Enable LoginWindow service so the graphical login is started at boot
@@ -829,6 +939,10 @@ main() {
     configure_pkg_repo
     install_packages
 
+    # Removable media must stay executable; udevil (devmon) is the automounter
+    # that mounts them, so patch its configuration before anyone logs in.
+    configure_udevil_mount_options
+
     # Boot splash (plymouth) - safe on all platforms: install-plymouth.sh
     # exits 0 on unsupported distributions.
     install_plymouth_splash
@@ -840,6 +954,7 @@ main() {
     if is_debian_like; then
         # Debian/Devuan-specific steps
         add_users_to_video_group_debian
+        enable_debian_services
         change_elogind_conf
 
         install_amlogic_xorg_conf
