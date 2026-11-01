@@ -65,25 +65,15 @@ if which Menu >/dev/null 2>&1; then
   if [ -z "$DBUS_SESSION_BUS_ADDRESS" ] ; then
     export $(dbus-launch)
   fi
-  # Make GTK 2/3/4 and Qt 5/6 applications show their menus in Menu, through the
-  # modules that are installed together with Menu (Menu/ToolkitModules).
-  export GTK_PATH=/System/Library/Libraries/appmenu-do${GTK_PATH:+:$GTK_PATH}
-  export GTK_MODULES=gtk-appmenu-do
-  export QT_PLUGIN_PATH=/System/Library/Libraries/appmenu-do${QT_PLUGIN_PATH:+:$QT_PLUGIN_PATH}
-  # gad first: it only starts the menu module and leaves the theme to the next name
-  case ":$QT_QPA_PLATFORMTHEME:" in *:gad:*) ;; *) export QT_QPA_PLATFORMTHEME=gad${QT_QPA_PLATFORMTHEME:+:$QT_QPA_PLATFORMTHEME} ;; esac
-  export GIO_EXTRA_MODULES=/System/Library/Libraries/appmenu-do/gio/modules${GIO_EXTRA_MODULES:+:$GIO_EXTRA_MODULES}
 fi
 
-# Give GTK 3 windows with a header bar the window manager's title bar instead
-# of a second one drawn by the application (gershwin-components GtkNoCSD).
-# The library is an optional component, so it is only preloaded where it is
-# installed.
-GTK_NOCSD=/System/Library/Libraries/libgershwin-gtk-nocsd.so
-if [ -e "$GTK_NOCSD" ] ; then
-  export LD_PRELOAD=${LD_PRELOAD:+$LD_PRELOAD:}$GTK_NOCSD
-fi
-unset GTK_NOCSD
+# The GTK/Qt menu modules (GTK_PATH, GTK_MODULES, QT_PLUGIN_PATH,
+# QT_QPA_PLATFORMTHEME, GIO_EXTRA_MODULES) and the GTK title bar preload
+# (LD_PRELOAD) are not exported here: they are native libraries, and a
+# program of another operating system that inherited them (a Linux program
+# on a BSD) would only get errors from its run-time linker. Workspace adds
+# them to each native application it launches, and Terminal to its shells,
+# from /System/Library/Preferences/ToolkitIntegration.plist.
 
 if [ -e /System/Library/Tools/SudoAskPass ] ; then
   export SUDO_ASKPASS=/System/Library/Tools/SudoAskPass
