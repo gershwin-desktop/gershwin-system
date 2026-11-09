@@ -45,6 +45,18 @@ unset vscode vscode_settings
 # Cannot run it like this here because e.g., on stock FreeBSD there is no sudo
 # sudo usermod -aG lpadmin $USER
 
+# LoginWindow.sh gives the session a low oom_score_adj so the kernel's OOM
+# killer spares the desktop's core; this shell and everything it starts
+# inherit it. A helper that is not part of that core is handed back to the
+# kernel's normal choice (0), which needs no privilege. Called first thing in
+# the subshell that starts the helper, where /proc/self is that subshell.
+# Linux only, like the protection itself.
+gershwin_not_core() {
+  [ "$(uname -s)" = Linux ] || return 0
+  echo 0 > /proc/self/oom_score_adj ||
+    echo "Gershwin.sh: could not set oom_score_adj of $1 to 0; it shares the desktop's OOM protection." >&2
+}
+
 # Launch devmon automounter if it is available (udevil package on Devuan).
 # The subshell is a foreground command, so this shell waits for it and reaps
 # it, while devmon itself is reparented to init when that subshell exits. A
@@ -55,13 +67,15 @@ unset vscode vscode_settings
 # udevil.conf alone cannot let programs run from removable disks. nosuid and
 # nodev stay, so setuid binaries and device nodes on such media are ignored.
 if which devmon >/dev/null 2>&1; then
-  (devmon --mount-options "nosuid,nodev,noatime" &)
+  (gershwin_not_core devmon; devmon --mount-options "nosuid,nodev,noatime" &)
 fi
 
 # D-Bus is required by Menu; only set up a session bus if none is there and
 # Menu is on the $PATH.  gershwin-session inherits this environment for all
 # supervised apps.
 if which Menu >/dev/null 2>&1; then
+  # The session bus keeps the desktop's protection from the OOM killer:
+  # Menu cannot show any application's menu without it.
   if [ -z "$DBUS_SESSION_BUS_ADDRESS" ] ; then
     export $(dbus-launch)
   fi
@@ -94,7 +108,7 @@ fi
 # to init when that subshell exits, so init reaps it instead. A plain
 # "gershwin-apply-settings &" is what produced the permanent zombie.
 if which gershwin-apply-settings >/dev/null 2>&1; then
-  ( gershwin-apply-settings & )
+  ( gershwin_not_core gershwin-apply-settings; gershwin-apply-settings & )
 fi
 
 # Supervise the desktop apps: gershwin-session (the session supervisor)
