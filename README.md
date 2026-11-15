@@ -19,13 +19,12 @@ It is safe to re-run. It installs the supporting packages and enables the servic
 | Service | FreeBSD / GhostBSD (rc.conf) | Linux with systemd | Linux with sysvinit (Devuan) |
 | --- | --- | --- | --- |
 | LoginWindow (graphical login) | `loginwindow` | `loginwindow` | `loginwindow` (init script, runlevel 5) |
-| Directory Services (dshelper, starts gdomap) | `dshelper` | `dshelper`, `gdomap` | `dshelper` (starts gdomap) |
 | D-Bus system bus | `dbus` | `dbus` | `dbus` |
 | mDNS (avahi, Linux only) | - | `avahi-daemon` | `avahi-daemon` |
 | Printing (CUPS) | `cupsd` | `cups` | `cups` |
 | Time synchronization | `ntpd` | - | - |
 
-`rpcbind` is not needed and is not enabled. OpenBSD and Arch Linux are not supported by this script yet.
+Directory Services needs no service for local users: the `nss_gershwin` module reads the user and group plists itself. `dshelper` is enabled by `dscli promote` on a directory server only, and is not enabled here. `rpcbind` is not needed and is not enabled. OpenBSD and Arch Linux are not supported by this script yet.
 
 ## Image based "installation"
 

@@ -784,20 +784,6 @@ set_binary_setuid() {
     done
 } 
 
-# Enable Directory Services helper so directory users can log in
-enable_dshelper() {
-    log "Enabling dshelper (Directory Services)"
-    if is_freebsd; then
-        sysrc dshelper_enable="YES" || log "Warning: failed to enable dshelper via sysrc"
-    elif is_systemd; then
-        systemctl enable gdomap dshelper || log "Warning: failed to enable gdomap/dshelper via systemctl"
-    elif [ -d /etc/init.d ] && command -v update-rc.d >/dev/null 2>&1; then
-        update-rc.d dshelper defaults || log "Warning: failed to enable dshelper via update-rc.d"
-    else
-        log "No supported init system detected for dshelper"
-    fi
-}
-
 # Enable one service on Debian-like systems, whichever init system is running
 enable_debian_service() {
     svc="$1"
@@ -947,8 +933,9 @@ main() {
     # exits 0 on unsupported distributions.
     install_plymouth_splash
 
-    # Enable Directory Services and LoginWindow on all platforms
-    enable_dshelper
+    # Enable LoginWindow on all platforms. Directory Services needs no
+    # service: nss_gershwin reads the plists itself, and dshelper is enabled
+    # by `dscli promote` on a directory server only.
     enable_loginwindow
 
     if is_debian_like; then
