@@ -1,6 +1,7 @@
 #!/bin/sh
 
-# System preparation script for Gershwin on FreeBSD, Devuan, Debian, Raspberry Pi OS systems.
+# System preparation script for Gershwin on FreeBSD, Devuan, Debian, Raspberry Pi OS systems
+# (on OpenBSD only the USB scanner access is set up so far).
 # This script performs a small set of post-install configuration steps required
 # for the desktop to work (users->video group, setuid helpers, kernels, sysctls).
 # Run this script as root.
@@ -32,6 +33,10 @@ is_freebsd() {
     uname -s | grep -qE 'FreeBSD|GhostBSD' 2>/dev/null || echo "${OS_LIKE}" | grep -qE 'freebsd' 2>/dev/null
 }
 
+is_openbsd() {
+    [ "$(uname -s)" = OpenBSD ]
+}
+
 is_ghostbsd() {
     if [ -f /etc/os-release ]; then
         grep -qi 'ID=ghostbsd' /etc/os-release >/dev/null 2>&1 && return 0
@@ -43,10 +48,10 @@ is_ghostbsd() {
 
 verify_platform() {
     get_os_like
-    if is_freebsd || is_debian_like; then
+    if is_freebsd || is_debian_like || is_openbsd; then
         log "Detected platform: ${OS_LIKE:-$(uname -s)}"
     else
-        log "Error: This script is intended for FreeBSD or Debian-like systems"
+        log "Error: This script is intended for FreeBSD, OpenBSD or Debian-like systems"
         exit 1
     fi
 }
@@ -94,6 +99,41 @@ ensure_group_exists() {
     fi
 }
 
+# Local groups only: a group served by Directory Services cannot take local
+# members, and asking NSS would report it as present.
+local_group_exists() {
+    grep -q "^$1:" /etc/group 2>/dev/null
+}
+
+# Add a local user to an existing local group with the platform's own tool.
+# A missing group is logged and skipped: the package that needs the group
+# (libsane1, sane-backends, hplip) creates it, so its absence means that
+# hardware is not supported here yet rather than something to make up.
+add_user_to_group() {
+    user="$1"
+    grp="$2"
+    if ! local_group_exists "$grp"; then
+        log "Group $grp does not exist; not adding $user to it"
+        return
+    fi
+    if id -nG "$user" 2>/dev/null | tr ' ' '\n' | grep -qx "$grp"; then
+        log "$user already in $grp group"
+        return
+    fi
+    case "$(uname -s)" in
+        Linux) usermod -a -G "$grp" "$user" 2>/dev/null ;;
+        # OpenBSD's usermod -G appends; -S would replace the list
+        OpenBSD) usermod -G "$grp" "$user" 2>/dev/null ;;
+        *) pw groupmod "$grp" -m "$user" 2>/dev/null ;;
+    esac && log "Added $user to $grp group" || log "Failed to add $user to $grp group"
+}
+
+# Interactive local accounts; Directory Services users get the same groups
+# from nss_gershwin instead, as they are not in /etc/passwd.
+local_desktop_users() {
+    awk -F: '$3 >= 1000 && $3 < 60000 {print $1}' /etc/passwd
+}
+
 pick_package() {
     # Print first available package from arguments
     for p in "$@"; do
@@ -133,6 +173,10 @@ install_debian_packages() {
     if pkg=$(pick_package dbus); then add_pkg "$pkg"; fi
     if pkg=$(pick_package avahi-daemon); then add_pkg "$pkg"; fi
     if pkg=$(pick_package cups); then add_pkg "$pkg"; fi
+    # Scanning: libsane1 ships the udev rule that grants USB scanners to the
+    # "scanner" group (setfacl) and creates that group; saned is not needed
+    # for scanners attached to this machine
+    if pkg=$(pick_package libsane1); then add_pkg "$pkg"; fi
     if pkg=$(pick_package x11-utils); then add_pkg "$pkg"; fi
     if pkg=$(pick_package xdotool); then add_pkg "$pkg"; fi
     if pkg=$(pick_package x11-xkb-utils); then add_pkg "$pkg"; fi
@@ -194,23 +238,17 @@ install_debian_packages() {
     fi
 }
 
+# scanner: libsane1's udev rule gives SANE-known scanners to this group.
+# lp: hplip's udev rule gives HP all-in-ones (printer plus scanner) to lp.
 add_users_to_video_group_debian() {
-    log "Adding local users (UID >= 1000) to sudo and video groups (Debian-like)"
+    log "Adding local users (UID >= 1000) to sudo, video, scanner and lp groups (Debian-like)"
     ensure_group_exists video
     ensure_group_exists sudo
 
-    for user in $(awk -F: '$3 >= 1000 {print $1}' /etc/passwd); do
-        if id -nG "$user" | grep -qw sudo; then
-            log "$user already in sudo group"
-        else
-            usermod -a -G sudo "$user" 2>/dev/null && log "Added $user to sudo group" || log "Failed to add $user to sudo group"
-        fi
-
-        if id -nG "$user" | grep -qw video; then
-            log "$user already in video group"
-        else
-            usermod -a -G video "$user" 2>/dev/null && log "Added $user to video group" || log "Failed to add $user to video group"
-        fi
+    for user in $(local_desktop_users); do
+        for grp in sudo video scanner lp; do
+            add_user_to_group "$user" "$grp"
+        done
     done
 }
 
@@ -663,8 +701,11 @@ install_packages() {
     WLAN_FW_PKGS="wifi-firmware-kmod wifi-firmware-ath10k-kmod wifi-firmware-ath11k-kmod wifi-firmware-iwlwifi-kmod wifi-firmware-mt76-kmod wifi-firmware-rtw88-kmod wifi-firmware-rtw89-kmod bwi-firmware-kmod bwn-firmware-kmod iwm-firmware-kmod iwi-firmware-kmod ipw-firmware-kmod"
     BT_FW_PKGS="bluez-firmware"
 
+    # sane-backends creates the saned group that configure_devfs_scanner_access
+    # hands the USB device nodes to
     pkg install -y nano \
         drm-kmod ${X11_PKGS} setxkbmap \
+        sane-backends \
         xkill xwininfo xdotool \
         automount sshpass ${WLAN_FW_PKGS} ${BT_FW_PKGS} \
         ntp \
@@ -747,24 +788,102 @@ enable_freebsd_services() {
 }
 
 # Add interactive desktop users to groups that allow access to video and privileged helpers
-# Rationale: GUI users need access to video devices; adding to wheel also convenient for local admin tasks
+# Rationale: GUI users need access to video devices; adding to wheel also convenient for local admin tasks;
+# saned owns the USB device nodes once configure_devfs_scanner_access has run
 add_users_to_video_group() {
-    log "Adding local users (UID >= 1000) to wheel and video groups"
-    # Find all users with UID >= 1000
-    for user in $(awk -F: '$3 >= 1000 {print $1}' /etc/passwd); do
-        if id -nG "$user" | grep -qw wheel; then
-            log "$user already in wheel group"
-        else
-            pw groupmod wheel -m "$user" 2>/dev/null && log "Added $user to wheel group" || log "Failed to add $user to wheel group"
-        fi
-
-        if id -nG "$user" | grep -qw video; then
-            log "$user already in video group"
-        else
-            pw groupmod video -m "$user" 2>/dev/null && log "Added $user to video group" || log "Failed to add $user to video group"
-        fi
+    log "Adding local users (UID >= 1000) to wheel, video and saned groups"
+    for user in $(local_desktop_users); do
+        for grp in wheel video saned; do
+            add_user_to_group "$user" "$grp"
+        done
     done
-} 
+}
+
+# The kernel creates /dev/usb/B.A.E as root:operator 0600, so SANE (through
+# libusb, which opens /dev/ugenB.A -> usb/B.A.0) only works as root. This
+# devfs ruleset gives the nodes to the sane-backends port's own group, the
+# group its pkg-message uses. devfs rules match names, not device classes,
+# and most scanners use the vendor-specific class, so the rule cannot be
+# narrowed to scanners: saned members can talk to any USB device that no
+# kernel driver has claimed (detaching a driver still needs root).
+DEVFS_SCANNER_RULESET="gershwin_scanner"
+DEVFS_SCANNER_RULESET_NUMBER=20
+
+configure_devfs_scanner_access() {
+    if [ ! -f /etc/defaults/rc.conf ]; then
+        # NextBSD has no rc.conf; its image applies the same rules from a
+        # launchd job instead
+        log "No /etc/defaults/rc.conf; not configuring devfs rules for scanners"
+        return
+    fi
+    if ! local_group_exists saned; then
+        log "Group saned does not exist (sane-backends not installed?); not configuring devfs rules for scanners"
+        return
+    fi
+
+    if grep -q "^\[${DEVFS_SCANNER_RULESET}=" /etc/devfs.rules 2>/dev/null; then
+        log "devfs ruleset ${DEVFS_SCANNER_RULESET} already present in /etc/devfs.rules"
+    elif grep -q "^\[[^]]*=${DEVFS_SCANNER_RULESET_NUMBER}\]" /etc/devfs.rules 2>/dev/null; then
+        log "Warning: devfs ruleset number ${DEVFS_SCANNER_RULESET_NUMBER} is taken in /etc/devfs.rules; not adding scanner rules"
+        return
+    else
+        log "Adding devfs ruleset ${DEVFS_SCANNER_RULESET} (USB devices for group saned) to /etc/devfs.rules"
+        {
+            printf "\n# Added by Gershwin SystemPrepare: SANE needs the USB nodes as the desktop user\n"
+            printf "[%s=%s]\n" "$DEVFS_SCANNER_RULESET" "$DEVFS_SCANNER_RULESET_NUMBER"
+            printf "add path 'usb/*' mode 0660 group saned\n"
+            printf "add path 'ugen*' mode 0660 group saned\n"
+        } >> /etc/devfs.rules || { log "Warning: failed to write /etc/devfs.rules"; return; }
+    fi
+
+    current_ruleset=$(sysrc -n devfs_system_ruleset 2>/dev/null)
+    case "$current_ruleset" in
+        "$DEVFS_SCANNER_RULESET")
+            log "devfs_system_ruleset already ${DEVFS_SCANNER_RULESET}"
+            ;;
+        "")
+            sysrc devfs_system_ruleset="$DEVFS_SCANNER_RULESET" || { log "Warning: sysrc failed to set devfs_system_ruleset"; return; }
+            # Apply now so scanners work without a reboot
+            service devfs restart || log "Warning: failed to restart devfs; the rules apply at next boot"
+            ;;
+        *)
+            # Only one system ruleset can be active, and replacing someone
+            # else's would drop their rules
+            log "devfs_system_ruleset is already ${current_ruleset}; add the rules of [${DEVFS_SCANNER_RULESET}] in /etc/devfs.rules to it so saned members can use USB scanners"
+            ;;
+    esac
+}
+
+# OpenBSD device nodes are static files that MAKEDEV (run again by sysmerge
+# on upgrades) resets, so the sane-backends README's chgrp/chmod is redone
+# from rc.local at every boot. _saned is the group that README names; it
+# also owns the lock files some backends need.
+OPENBSD_RC_LOCAL_MARK="# Gershwin: USB device nodes for SANE (group _saned)"
+
+configure_openbsd_scanner_access() {
+    if ! local_group_exists _saned; then
+        log "Group _saned does not exist (sane-backends not installed?); not configuring USB scanner access"
+        return
+    fi
+    if grep -qF "$OPENBSD_RC_LOCAL_MARK" /etc/rc.local 2>/dev/null; then
+        log "/etc/rc.local already sets the USB device nodes for SANE"
+    else
+        log "Adding USB device node permissions for SANE to /etc/rc.local"
+        # /dev/usbN lets libusb enumerate the bus, /dev/ugenN.EE are the
+        # endpoints; like on FreeBSD this covers every USB device without a
+        # kernel driver, not only scanners
+        {
+            printf "\n%s\n" "$OPENBSD_RC_LOCAL_MARK"
+            printf "chgrp _saned /dev/ugen*.* /dev/usb[0-9]* && chmod 660 /dev/ugen*.* /dev/usb[0-9]*\n"
+        } >> /etc/rc.local || { log "Warning: failed to write /etc/rc.local"; return; }
+    fi
+    # Apply now so scanners work without a reboot
+    chgrp _saned /dev/ugen*.* /dev/usb[0-9]* && chmod 660 /dev/ugen*.* /dev/usb[0-9]* || log "Warning: failed to set USB device node permissions now"
+
+    for user in $(local_desktop_users); do
+        add_user_to_group "$user" _saned
+    done
+}
 
 # Set setuid on a small number of system helpers so GUI tools and non-root users can perform common actions
 # Rationale: mount/umount/eject/shutdown/reboot/halt are commonly invoked from GUI tools and expect setuid
@@ -922,6 +1041,12 @@ main() {
     verify_platform
     require_root
 
+    if is_openbsd; then
+        # Only the scanner setup is implemented for OpenBSD so far
+        configure_openbsd_scanner_access
+        return
+    fi
+
     configure_pkg_repo
     install_packages
 
@@ -957,6 +1082,7 @@ main() {
         enable_freebsd_services
 
         add_users_to_video_group
+        configure_devfs_scanner_access
         set_binary_setuid
 
         add_sysctl_tuning
