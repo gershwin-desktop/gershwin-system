@@ -1,6 +1,7 @@
 #!/bin/sh
 
-# System preparation script for Gershwin on FreeBSD, Devuan, Debian, Raspberry Pi OS systems.
+# System preparation script for Gershwin on FreeBSD, Devuan, Debian, Raspberry Pi OS systems
+# (on OpenBSD only the USB scanner access is set up so far).
 # This script performs a small set of post-install configuration steps required
 # for the desktop to work (users->video group, setuid helpers, kernels, sysctls).
 # Run this script as root.
@@ -32,6 +33,10 @@ is_freebsd() {
     uname -s | grep -qE 'FreeBSD|GhostBSD' 2>/dev/null || echo "${OS_LIKE}" | grep -qE 'freebsd' 2>/dev/null
 }
 
+is_openbsd() {
+    [ "$(uname -s)" = OpenBSD ]
+}
+
 is_ghostbsd() {
     if [ -f /etc/os-release ]; then
         grep -qi 'ID=ghostbsd' /etc/os-release >/dev/null 2>&1 && return 0
@@ -43,10 +48,10 @@ is_ghostbsd() {
 
 verify_platform() {
     get_os_like
-    if is_freebsd || is_debian_like; then
+    if is_freebsd || is_debian_like || is_openbsd; then
         log "Detected platform: ${OS_LIKE:-$(uname -s)}"
     else
-        log "Error: This script is intended for FreeBSD or Debian-like systems"
+        log "Error: This script is intended for FreeBSD, OpenBSD or Debian-like systems"
         exit 1
     fi
 }
@@ -94,6 +99,41 @@ ensure_group_exists() {
     fi
 }
 
+# Local groups only: a group served by Directory Services cannot take local
+# members, and asking NSS would report it as present.
+local_group_exists() {
+    grep -q "^$1:" /etc/group 2>/dev/null
+}
+
+# Add a local user to an existing local group with the platform's own tool.
+# A missing group is logged and skipped: the package that needs the group
+# (libsane1, sane-backends, hplip) creates it, so its absence means that
+# hardware is not supported here yet rather than something to make up.
+add_user_to_group() {
+    user="$1"
+    grp="$2"
+    if ! local_group_exists "$grp"; then
+        log "Group $grp does not exist; not adding $user to it"
+        return
+    fi
+    if id -nG "$user" 2>/dev/null | tr ' ' '\n' | grep -qx "$grp"; then
+        log "$user already in $grp group"
+        return
+    fi
+    case "$(uname -s)" in
+        Linux) usermod -a -G "$grp" "$user" 2>/dev/null ;;
+        # OpenBSD's usermod -G appends; -S would replace the list
+        OpenBSD) usermod -G "$grp" "$user" 2>/dev/null ;;
+        *) pw groupmod "$grp" -m "$user" 2>/dev/null ;;
+    esac && log "Added $user to $grp group" || log "Failed to add $user to $grp group"
+}
+
+# Interactive local accounts; Directory Services users get the same groups
+# from nss_gershwin instead, as they are not in /etc/passwd.
+local_desktop_users() {
+    awk -F: '$3 >= 1000 && $3 < 60000 {print $1}' /etc/passwd
+}
+
 pick_package() {
     # Print first available package from arguments
     for p in "$@"; do
@@ -128,6 +168,15 @@ install_debian_packages() {
     if pkg=$(pick_package xinit); then add_pkg "$pkg"; fi
     if pkg=$(pick_package dbus-x11); then add_pkg "$pkg"; fi
     if pkg=$(pick_package psmisc); then add_pkg "$pkg"; fi
+    # Services enabled by enable_debian_services; the desktop needs the system
+    # bus, mDNS (Sharing) and printing
+    if pkg=$(pick_package dbus); then add_pkg "$pkg"; fi
+    if pkg=$(pick_package avahi-daemon); then add_pkg "$pkg"; fi
+    if pkg=$(pick_package cups); then add_pkg "$pkg"; fi
+    # Scanning: libsane1 ships the udev rule that grants USB scanners to the
+    # "scanner" group (setfacl) and creates that group; saned is not needed
+    # for scanners attached to this machine
+    if pkg=$(pick_package libsane1); then add_pkg "$pkg"; fi
     if pkg=$(pick_package x11-utils); then add_pkg "$pkg"; fi
     if pkg=$(pick_package xdotool); then add_pkg "$pkg"; fi
     if pkg=$(pick_package x11-xkb-utils); then add_pkg "$pkg"; fi
@@ -189,23 +238,19 @@ install_debian_packages() {
     fi
 }
 
+# scanner: libsane1's udev rule gives SANE-known scanners to this group.
+# lp: hplip's udev rule gives HP all-in-ones (printer plus scanner) to lp.
 add_users_to_video_group_debian() {
-    log "Adding local users (UID >= 1000) to sudo and video groups (Debian-like)"
+    log "Adding local users (UID >= 1000) to sudo, video, scanner, lp and lpadmin groups (Debian-like)"
     ensure_group_exists video
     ensure_group_exists sudo
 
-    for user in $(awk -F: '$3 >= 1000 {print $1}' /etc/passwd); do
-        if id -nG "$user" | grep -qw sudo; then
-            log "$user already in sudo group"
-        else
-            usermod -a -G sudo "$user" 2>/dev/null && log "Added $user to sudo group" || log "Failed to add $user to sudo group"
-        fi
-
-        if id -nG "$user" | grep -qw video; then
-            log "$user already in video group"
-        else
-            usermod -a -G video "$user" 2>/dev/null && log "Added $user to video group" || log "Failed to add $user to video group"
-        fi
+    # lpadmin is the CUPS SystemGroup on Debian, Ubuntu and Devuan; the cups
+    # package creates it, so it is only added to where it exists.
+    for user in $(local_desktop_users); do
+        for grp in sudo video scanner lp lpadmin; do
+            add_user_to_group "$user" "$grp"
+        done
     done
 }
 
@@ -559,6 +604,118 @@ EOF
     fi
 }
 
+# udevil is the automounter behind devmon, which Gershwin.sh starts at login.
+# Its stock configuration mounts every filesystem with noexec, so programs
+# stored on removable disks cannot be run. Replace noexec with exec in the
+# option lists; nosuid and nodev stay, so setuid binaries and device nodes on
+# such media are still ignored.
+#
+# Each default_options* line is rewritten together with the matching
+# allowed_options* lines: udevil rejects a default option that is not also
+# allowed, and the shipped file always lists the same tokens in both, so the
+# substitution keeps that invariant.
+#
+# The edit is done on a copy and moved into place, so a failure at any step
+# leaves the installed file untouched. The function never fails the script:
+# udevil may simply not be installed, and this step is not essential for the
+# rest of the preparation. Per-user overrides (udevil-user-NAME.conf) are not
+# touched; an administrator who creates one chooses its options explicitly.
+configure_udevil_mount_options() {
+    UDEVIL_CONF="/etc/udevil/udevil.conf"
+
+    if [ ! -f "$UDEVIL_CONF" ]; then
+        log "udevil is not installed; skipping mount option configuration"
+        return 0
+    fi
+
+    # Replacing a link with a regular file would silently detach it from
+    # wherever it points; leave unusual layouts to the administrator.
+    if [ -L "$UDEVIL_CONF" ]; then
+        log "Warning: $UDEVIL_CONF is a symbolic link; leaving it unchanged"
+        return 0
+    fi
+
+    # Only option assignments count, not the comments around them.
+    UDEVIL_NOEXEC='^[[:space:]]*(default_options|allowed_options)[^[:space:]]*[[:space:]]*=.*noexec'
+
+    # Debian's default_options_exfat carries namecase= and nonempty, which
+    # only the FUSE exfat driver (mount.exfat) understands. The kernel's own
+    # exfat driver, which mount(8) uses when no mount.exfat helper is
+    # installed, rejects them ("Unknown parameter 'nonempty'") and every
+    # udevil/devmon mount of an exFAT disk fails. Keep them when the FUSE
+    # helper is there, since udevil then mounts through it.
+    UDEVIL_EXFAT_FUSE=""
+    if [ -x /sbin/mount.exfat ] || [ -x /usr/sbin/mount.exfat ]; then
+        UDEVIL_EXFAT_FUSE=1
+    fi
+    UDEVIL_EXFAT_LINE='^[[:space:]]*default_options_exfat[[:space:]]*='
+    UDEVIL_EXFAT_FUSEONLY="${UDEVIL_EXFAT_LINE}.*(namecase=|nonempty)"
+
+    UDEVIL_FIX_EXEC=""
+    UDEVIL_FIX_EXFAT=""
+    if grep -Eq "$UDEVIL_NOEXEC" "$UDEVIL_CONF" 2>/dev/null; then
+        UDEVIL_FIX_EXEC=1
+    fi
+    if [ -z "$UDEVIL_EXFAT_FUSE" ] && \
+       grep -Eq "$UDEVIL_EXFAT_FUSEONLY" "$UDEVIL_CONF" 2>/dev/null; then
+        UDEVIL_FIX_EXFAT=1
+    fi
+
+    if [ -z "$UDEVIL_FIX_EXEC" ] && [ -z "$UDEVIL_FIX_EXFAT" ]; then
+        log "udevil mount options are already right; nothing to change"
+        return 0
+    fi
+
+    UDEVIL_TMP="${UDEVIL_CONF}.gershwin.$$"
+
+    # Copy first so the replacement keeps the original owner, mode and times;
+    # redirecting into the existing file preserves them.
+    if ! cp -p "$UDEVIL_CONF" "$UDEVIL_TMP" 2>/dev/null; then
+        rm -f "$UDEVIL_TMP"
+        log "Warning: could not create $UDEVIL_TMP; leaving $UDEVIL_CONF unchanged"
+        return 0
+    fi
+
+    # "b" branches to the end of the script: a no-op for the FUSE case.
+    UDEVIL_EXFAT_SED='/^[[:space:]]*default_options_exfat[[:space:]]*=/ s/[[:space:]]*,[[:space:]]*(namecase=[^,[:space:]]*|nonempty)//g'
+    if [ -n "$UDEVIL_EXFAT_FUSE" ]; then
+        UDEVIL_EXFAT_SED='b'
+    fi
+
+    if ! sed -E -e '/^[[:space:]]*default_options/ s/noexec/exec/g' \
+             -e '/^[[:space:]]*allowed_options/ s/noexec/exec/g' \
+             -e "$UDEVIL_EXFAT_SED" \
+             "$UDEVIL_CONF" >"$UDEVIL_TMP" 2>/dev/null; then
+        rm -f "$UDEVIL_TMP"
+        log "Warning: could not rewrite $UDEVIL_CONF; leaving it unchanged"
+        return 0
+    fi
+
+    # Refuse to install an empty or incomplete result.
+    if [ ! -s "$UDEVIL_TMP" ] || grep -Eq "$UDEVIL_NOEXEC" "$UDEVIL_TMP" 2>/dev/null || \
+       { [ -z "$UDEVIL_EXFAT_FUSE" ] && \
+         grep -Eq "$UDEVIL_EXFAT_FUSEONLY" "$UDEVIL_TMP" 2>/dev/null; }; then
+        rm -f "$UDEVIL_TMP"
+        log "Warning: rewrite of $UDEVIL_CONF was incomplete; leaving it unchanged"
+        return 0
+    fi
+
+    # Keep the package's original once, in case the change has to be undone.
+    if [ ! -f "${UDEVIL_CONF}.gershwin.bak" ]; then
+        cp -p "$UDEVIL_CONF" "${UDEVIL_CONF}.gershwin.bak" 2>/dev/null || \
+            log "Warning: could not back up $UDEVIL_CONF"
+    fi
+
+    if mv -f "$UDEVIL_TMP" "$UDEVIL_CONF" 2>/dev/null; then
+        log "udevil mount options adjusted ($UDEVIL_CONF)"
+    else
+        rm -f "$UDEVIL_TMP"
+        log "Warning: could not replace $UDEVIL_CONF; leaving it unchanged"
+    fi
+
+    return 0
+}
+
 install_packages() {
     if is_debian_like; then
         install_debian_packages
@@ -578,8 +735,11 @@ install_packages() {
     WLAN_FW_PKGS="wifi-firmware-kmod wifi-firmware-ath10k-kmod wifi-firmware-ath11k-kmod wifi-firmware-iwlwifi-kmod wifi-firmware-mt76-kmod wifi-firmware-rtw88-kmod wifi-firmware-rtw89-kmod bwi-firmware-kmod bwn-firmware-kmod iwm-firmware-kmod iwi-firmware-kmod ipw-firmware-kmod"
     BT_FW_PKGS="bluez-firmware"
 
+    # sane-backends creates the saned group that configure_devfs_scanner_access
+    # hands the USB device nodes to
     pkg install -y nano \
         drm-kmod ${X11_PKGS} setxkbmap \
+        sane-backends \
         xkill xwininfo xdotool \
         automount sshpass ${WLAN_FW_PKGS} ${BT_FW_PKGS} \
         ntp \
@@ -650,10 +810,9 @@ configure_kld_list() {
 # Enable and configure common FreeBSD services
 enable_freebsd_services() {
     if command -v sysrc >/dev/null 2>&1; then
-        log "Enabling common FreeBSD services (cups, avahi, ntpd, clear_tmp)"
+        log "Enabling common FreeBSD services (dbus, cups, ntpd, clear_tmp)"
+        sysrc dbus_enable="YES" # Enable the D-Bus system bus (used by the desktop's hardware and power handling)
         sysrc cupsd_enable="YES" # Enable CUPS printing daemon
-        sysrc avahi_daemon_enable="YES" # Enable Avahi mDNS/DNS-SD daemon for network service discovery
-        sysrc avahi_dnsconfd_enable="YES" # Enable Avahi's DNS resolver integration
         sysrc ntpd_enable="YES" # Enable NTP daemon for time synchronization
         sysrc ntpd_sync_on_start="YES" # Force ntpd to sync immediately on start
         sysrc clear_tmp_enable="YES" # Enable clearing of /tmp at boot
@@ -664,23 +823,102 @@ enable_freebsd_services() {
 
 # Add interactive desktop users to groups that allow access to video and privileged helpers
 # Rationale: GUI users need access to video devices; adding to wheel also convenient for local admin tasks
+# and it is the CUPS SystemGroup of the cups port, so it lets them manage printers;
+# saned owns the USB device nodes once configure_devfs_scanner_access has run
 add_users_to_video_group() {
-    log "Adding local users (UID >= 1000) to wheel and video groups"
-    # Find all users with UID >= 1000
-    for user in $(awk -F: '$3 >= 1000 {print $1}' /etc/passwd); do
-        if id -nG "$user" | grep -qw wheel; then
-            log "$user already in wheel group"
-        else
-            pw groupmod wheel -m "$user" 2>/dev/null && log "Added $user to wheel group" || log "Failed to add $user to wheel group"
-        fi
-
-        if id -nG "$user" | grep -qw video; then
-            log "$user already in video group"
-        else
-            pw groupmod video -m "$user" 2>/dev/null && log "Added $user to video group" || log "Failed to add $user to video group"
-        fi
+    log "Adding local users (UID >= 1000) to wheel, video and saned groups"
+    for user in $(local_desktop_users); do
+        for grp in wheel video saned; do
+            add_user_to_group "$user" "$grp"
+        done
     done
-} 
+}
+
+# The kernel creates /dev/usb/B.A.E as root:operator 0600, so SANE (through
+# libusb, which opens /dev/ugenB.A -> usb/B.A.0) only works as root. This
+# devfs ruleset gives the nodes to the sane-backends port's own group, the
+# group its pkg-message uses. devfs rules match names, not device classes,
+# and most scanners use the vendor-specific class, so the rule cannot be
+# narrowed to scanners: saned members can talk to any USB device that no
+# kernel driver has claimed (detaching a driver still needs root).
+DEVFS_SCANNER_RULESET="gershwin_scanner"
+DEVFS_SCANNER_RULESET_NUMBER=20
+
+configure_devfs_scanner_access() {
+    if [ ! -f /etc/defaults/rc.conf ]; then
+        # NextBSD has no rc.conf; its image applies the same rules from a
+        # launchd job instead
+        log "No /etc/defaults/rc.conf; not configuring devfs rules for scanners"
+        return
+    fi
+    if ! local_group_exists saned; then
+        log "Group saned does not exist (sane-backends not installed?); not configuring devfs rules for scanners"
+        return
+    fi
+
+    if grep -q "^\[${DEVFS_SCANNER_RULESET}=" /etc/devfs.rules 2>/dev/null; then
+        log "devfs ruleset ${DEVFS_SCANNER_RULESET} already present in /etc/devfs.rules"
+    elif grep -q "^\[[^]]*=${DEVFS_SCANNER_RULESET_NUMBER}\]" /etc/devfs.rules 2>/dev/null; then
+        log "Warning: devfs ruleset number ${DEVFS_SCANNER_RULESET_NUMBER} is taken in /etc/devfs.rules; not adding scanner rules"
+        return
+    else
+        log "Adding devfs ruleset ${DEVFS_SCANNER_RULESET} (USB devices for group saned) to /etc/devfs.rules"
+        {
+            printf "\n# Added by Gershwin SystemPrepare: SANE needs the USB nodes as the desktop user\n"
+            printf "[%s=%s]\n" "$DEVFS_SCANNER_RULESET" "$DEVFS_SCANNER_RULESET_NUMBER"
+            printf "add path 'usb/*' mode 0660 group saned\n"
+            printf "add path 'ugen*' mode 0660 group saned\n"
+        } >> /etc/devfs.rules || { log "Warning: failed to write /etc/devfs.rules"; return; }
+    fi
+
+    current_ruleset=$(sysrc -n devfs_system_ruleset 2>/dev/null)
+    case "$current_ruleset" in
+        "$DEVFS_SCANNER_RULESET")
+            log "devfs_system_ruleset already ${DEVFS_SCANNER_RULESET}"
+            ;;
+        "")
+            sysrc devfs_system_ruleset="$DEVFS_SCANNER_RULESET" || { log "Warning: sysrc failed to set devfs_system_ruleset"; return; }
+            # Apply now so scanners work without a reboot
+            service devfs restart || log "Warning: failed to restart devfs; the rules apply at next boot"
+            ;;
+        *)
+            # Only one system ruleset can be active, and replacing someone
+            # else's would drop their rules
+            log "devfs_system_ruleset is already ${current_ruleset}; add the rules of [${DEVFS_SCANNER_RULESET}] in /etc/devfs.rules to it so saned members can use USB scanners"
+            ;;
+    esac
+}
+
+# OpenBSD device nodes are static files that MAKEDEV (run again by sysmerge
+# on upgrades) resets, so the sane-backends README's chgrp/chmod is redone
+# from rc.local at every boot. _saned is the group that README names; it
+# also owns the lock files some backends need.
+OPENBSD_RC_LOCAL_MARK="# Gershwin: USB device nodes for SANE (group _saned)"
+
+configure_openbsd_scanner_access() {
+    if ! local_group_exists _saned; then
+        log "Group _saned does not exist (sane-backends not installed?); not configuring USB scanner access"
+        return
+    fi
+    if grep -qF "$OPENBSD_RC_LOCAL_MARK" /etc/rc.local 2>/dev/null; then
+        log "/etc/rc.local already sets the USB device nodes for SANE"
+    else
+        log "Adding USB device node permissions for SANE to /etc/rc.local"
+        # /dev/usbN lets libusb enumerate the bus, /dev/ugenN.EE are the
+        # endpoints; like on FreeBSD this covers every USB device without a
+        # kernel driver, not only scanners
+        {
+            printf "\n%s\n" "$OPENBSD_RC_LOCAL_MARK"
+            printf "chgrp _saned /dev/ugen*.* /dev/usb[0-9]* && chmod 660 /dev/ugen*.* /dev/usb[0-9]*\n"
+        } >> /etc/rc.local || { log "Warning: failed to write /etc/rc.local"; return; }
+    fi
+    # Apply now so scanners work without a reboot
+    chgrp _saned /dev/ugen*.* /dev/usb[0-9]* && chmod 660 /dev/ugen*.* /dev/usb[0-9]* || log "Warning: failed to set USB device node permissions now"
+
+    for user in $(local_desktop_users); do
+        add_user_to_group "$user" _saned
+    done
+}
 
 # Set setuid on a small number of system helpers so GUI tools and non-root users can perform common actions
 # Rationale: mount/umount/eject/shutdown/reboot/halt are commonly invoked from GUI tools and expect setuid
@@ -700,18 +938,30 @@ set_binary_setuid() {
     done
 } 
 
-# Enable Directory Services helper so directory users can log in
-enable_dshelper() {
-    log "Enabling dshelper (Directory Services)"
-    if is_freebsd; then
-        sysrc dshelper_enable="YES" || log "Warning: failed to enable dshelper via sysrc"
-    elif is_systemd; then
-        systemctl enable gdomap dshelper || log "Warning: failed to enable gdomap/dshelper via systemctl"
-    elif [ -d /etc/init.d ] && command -v update-rc.d >/dev/null 2>&1; then
-        update-rc.d dshelper defaults || log "Warning: failed to enable dshelper via update-rc.d"
+# Enable one service on Debian-like systems, whichever init system is running
+enable_debian_service() {
+    svc="$1"
+    if is_systemd; then
+        if systemctl list-unit-files "${svc}.service" 2>/dev/null | grep -q "^${svc}\.service"; then
+            systemctl enable "$svc" || log "Warning: failed to enable $svc via systemctl"
+        else
+            log "Warning: no systemd unit for $svc; is its package installed?"
+        fi
+    elif [ -x "/etc/init.d/$svc" ] && command -v update-rc.d >/dev/null 2>&1; then
+        update-rc.d "$svc" defaults || log "Warning: failed to enable $svc via update-rc.d"
     else
-        log "No supported init system detected for dshelper"
+        log "Warning: no init script for $svc; is its package installed?"
     fi
+}
+
+# Enable the services the desktop depends on that Debian-like systems do not
+# necessarily enable by themselves. rpcbind is deliberately not enabled: dshelper
+# and gdomap do not need it.
+enable_debian_services() {
+    log "Enabling system services (dbus, avahi-daemon, cups)"
+    enable_debian_service dbus
+    enable_debian_service avahi-daemon
+    enable_debian_service cups
 }
 
 # Enable LoginWindow service so the graphical login is started at boot
@@ -826,20 +1076,32 @@ main() {
     verify_platform
     require_root
 
+    if is_openbsd; then
+        # Only the scanner setup is implemented for OpenBSD so far
+        configure_openbsd_scanner_access
+        return
+    fi
+
     configure_pkg_repo
     install_packages
+
+    # Removable media must stay executable; udevil (devmon) is the automounter
+    # that mounts them, so patch its configuration before anyone logs in.
+    configure_udevil_mount_options
 
     # Boot splash (plymouth) - safe on all platforms: install-plymouth.sh
     # exits 0 on unsupported distributions.
     install_plymouth_splash
 
-    # Enable Directory Services and LoginWindow on all platforms
-    enable_dshelper
+    # Enable LoginWindow on all platforms. Directory Services needs no
+    # service: nss_gershwin reads the plists itself, and dshelper is enabled
+    # by `dscli promote` on a directory server only.
     enable_loginwindow
 
     if is_debian_like; then
         # Debian/Devuan-specific steps
         add_users_to_video_group_debian
+        enable_debian_services
         change_elogind_conf
 
         install_amlogic_xorg_conf
@@ -855,6 +1117,7 @@ main() {
         enable_freebsd_services
 
         add_users_to_video_group
+        configure_devfs_scanner_access
         set_binary_setuid
 
         add_sysctl_tuning

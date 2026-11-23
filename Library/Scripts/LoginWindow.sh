@@ -162,4 +162,41 @@ if [ "$(uname -s)" = "NextBSD" ]; then
     fi
 fi
 
+# Keep the desktop usable when memory runs out. This is the one root step
+# before any session exists, and it runs at every boot. Linux only for now:
+# FreeBSD and NextBSD would use protect(1) (procctl PROC_SPROTECT, -i to
+# inherit) and the vm.pageout_oom_seq sysctl, OpenBSD has no OOM killer to
+# steer.
+lw_warn() {
+    echo "LoginWindow.sh: $*" >&2
+    logger -t LoginWindow "$*"
+}
+if [ "$(uname -s)" = Linux ]; then
+    # Thrashing protection: with the multi-gen LRU, a working set younger
+    # than min_ttl_ms is never evicted; when the kernel cannot keep one
+    # second of it in memory it invokes the OOM killer instead of paging
+    # the desktop to a standstill (Documentation/admin-guide/mm/
+    # multigen_lru.rst, "Thrashing prevention"). Bit 0 of "enabled" is the
+    # main switch; a kernel without MGLRU has no such directory.
+    lw_lru=/sys/kernel/mm/lru_gen
+    if [ -e "$lw_lru/min_ttl_ms" ] && [ $(( $(cat "$lw_lru/enabled") & 1 )) -ne 0 ]; then
+        echo 1000 > "$lw_lru/min_ttl_ms" ||
+            lw_warn "could not write 1000 to $lw_lru/min_ttl_ms; the desktop may freeze instead of an app being killed when memory runs out"
+    fi
+    unset lw_lru
+
+    # OOM protection: the OOM killer picks the process with the highest
+    # badness, its size plus oom_score_adj thousandths of RAM. Only root
+    # may lower the value, and doing so as root also lowers
+    # oom_score_adj_min, the floor the unprivileged descendants may later
+    # return to. The value is inherited across fork, exec and setuid, so
+    # LoginWindow, the Xorg it starts and the user session all get it;
+    # gershwin-session, Gershwin.sh and Workspace raise everything that is
+    # not the desktop's core back to 0, so the biggest ordinary app is the
+    # one that goes. -900 rather than -1000: a core process that itself
+    # grows to nearly all of RAM can still be killed.
+    echo -900 > /proc/self/oom_score_adj ||
+        lw_warn "could not set oom_score_adj to -900; Xorg, Menu, Workspace and the WindowManager can be killed when memory runs out"
+fi
+
 exec LoginWindow
