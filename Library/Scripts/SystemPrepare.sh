@@ -636,8 +636,31 @@ configure_udevil_mount_options() {
     # Only option assignments count, not the comments around them.
     UDEVIL_NOEXEC='^[[:space:]]*(default_options|allowed_options)[^[:space:]]*[[:space:]]*=.*noexec'
 
-    if ! grep -Eq "$UDEVIL_NOEXEC" "$UDEVIL_CONF" 2>/dev/null; then
-        log "udevil already mounts disks with exec; nothing to change"
+    # Debian's default_options_exfat carries namecase= and nonempty, which
+    # only the FUSE exfat driver (mount.exfat) understands. The kernel's own
+    # exfat driver, which mount(8) uses when no mount.exfat helper is
+    # installed, rejects them ("Unknown parameter 'nonempty'") and every
+    # udevil/devmon mount of an exFAT disk fails. Keep them when the FUSE
+    # helper is there, since udevil then mounts through it.
+    UDEVIL_EXFAT_FUSE=""
+    if [ -x /sbin/mount.exfat ] || [ -x /usr/sbin/mount.exfat ]; then
+        UDEVIL_EXFAT_FUSE=1
+    fi
+    UDEVIL_EXFAT_LINE='^[[:space:]]*default_options_exfat[[:space:]]*='
+    UDEVIL_EXFAT_FUSEONLY="${UDEVIL_EXFAT_LINE}.*(namecase=|nonempty)"
+
+    UDEVIL_FIX_EXEC=""
+    UDEVIL_FIX_EXFAT=""
+    if grep -Eq "$UDEVIL_NOEXEC" "$UDEVIL_CONF" 2>/dev/null; then
+        UDEVIL_FIX_EXEC=1
+    fi
+    if [ -z "$UDEVIL_EXFAT_FUSE" ] && \
+       grep -Eq "$UDEVIL_EXFAT_FUSEONLY" "$UDEVIL_CONF" 2>/dev/null; then
+        UDEVIL_FIX_EXFAT=1
+    fi
+
+    if [ -z "$UDEVIL_FIX_EXEC" ] && [ -z "$UDEVIL_FIX_EXFAT" ]; then
+        log "udevil mount options are already right; nothing to change"
         return 0
     fi
 
@@ -651,8 +674,15 @@ configure_udevil_mount_options() {
         return 0
     fi
 
-    if ! sed -e '/^[[:space:]]*default_options/ s/noexec/exec/g' \
+    # "b" branches to the end of the script: a no-op for the FUSE case.
+    UDEVIL_EXFAT_SED='/^[[:space:]]*default_options_exfat[[:space:]]*=/ s/[[:space:]]*,[[:space:]]*(namecase=[^,[:space:]]*|nonempty)//g'
+    if [ -n "$UDEVIL_EXFAT_FUSE" ]; then
+        UDEVIL_EXFAT_SED='b'
+    fi
+
+    if ! sed -E -e '/^[[:space:]]*default_options/ s/noexec/exec/g' \
              -e '/^[[:space:]]*allowed_options/ s/noexec/exec/g' \
+             -e "$UDEVIL_EXFAT_SED" \
              "$UDEVIL_CONF" >"$UDEVIL_TMP" 2>/dev/null; then
         rm -f "$UDEVIL_TMP"
         log "Warning: could not rewrite $UDEVIL_CONF; leaving it unchanged"
@@ -660,7 +690,9 @@ configure_udevil_mount_options() {
     fi
 
     # Refuse to install an empty or incomplete result.
-    if [ ! -s "$UDEVIL_TMP" ] || grep -Eq "$UDEVIL_NOEXEC" "$UDEVIL_TMP" 2>/dev/null; then
+    if [ ! -s "$UDEVIL_TMP" ] || grep -Eq "$UDEVIL_NOEXEC" "$UDEVIL_TMP" 2>/dev/null || \
+       { [ -z "$UDEVIL_EXFAT_FUSE" ] && \
+         grep -Eq "$UDEVIL_EXFAT_FUSEONLY" "$UDEVIL_TMP" 2>/dev/null; }; then
         rm -f "$UDEVIL_TMP"
         log "Warning: rewrite of $UDEVIL_CONF was incomplete; leaving it unchanged"
         return 0
@@ -673,7 +705,7 @@ configure_udevil_mount_options() {
     fi
 
     if mv -f "$UDEVIL_TMP" "$UDEVIL_CONF" 2>/dev/null; then
-        log "udevil now mounts disks with exec ($UDEVIL_CONF)"
+        log "udevil mount options adjusted ($UDEVIL_CONF)"
     else
         rm -f "$UDEVIL_TMP"
         log "Warning: could not replace $UDEVIL_CONF; leaving it unchanged"
