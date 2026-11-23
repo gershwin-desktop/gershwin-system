@@ -241,12 +241,14 @@ install_debian_packages() {
 # scanner: libsane1's udev rule gives SANE-known scanners to this group.
 # lp: hplip's udev rule gives HP all-in-ones (printer plus scanner) to lp.
 add_users_to_video_group_debian() {
-    log "Adding local users (UID >= 1000) to sudo, video, scanner and lp groups (Debian-like)"
+    log "Adding local users (UID >= 1000) to sudo, video, scanner, lp and lpadmin groups (Debian-like)"
     ensure_group_exists video
     ensure_group_exists sudo
 
+    # lpadmin is the CUPS SystemGroup on Debian, Ubuntu and Devuan; the cups
+    # package creates it, so it is only added to where it exists.
     for user in $(local_desktop_users); do
-        for grp in sudo video scanner lp; do
+        for grp in sudo video scanner lp lpadmin; do
             add_user_to_group "$user" "$grp"
         done
     done
@@ -820,7 +822,8 @@ enable_freebsd_services() {
 }
 
 # Add interactive desktop users to groups that allow access to video and privileged helpers
-# Rationale: GUI users need access to video devices; adding to wheel also convenient for local admin tasks;
+# Rationale: GUI users need access to video devices; adding to wheel also convenient for local admin tasks
+# and it is the CUPS SystemGroup of the cups port, so it lets them manage printers;
 # saned owns the USB device nodes once configure_devfs_scanner_access has run
 add_users_to_video_group() {
     log "Adding local users (UID >= 1000) to wheel, video and saned groups"
